@@ -24,7 +24,7 @@ async fn run_app() -> Result<(), AppError> {
 fn handle_app_error(app_error: AppError) {
     match app_error {
         AppError::Io(e) => {
-            error!("I/O error: {e}")
+            error!("{e}")
         }
     }
 }

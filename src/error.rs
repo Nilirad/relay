@@ -1,9 +1,7 @@
-pub enum AppError {
-    Io(std::io::Error),
-}
+use thiserror::Error;
 
-impl From<std::io::Error> for AppError {
-    fn from(e: std::io::Error) -> Self {
-        Self::Io(e)
-    }
+#[derive(Debug, Error)]
+pub enum AppError {
+    #[error("I/O Error: {0}")]
+    Io(#[from] std::io::Error),
 }
