@@ -1132,6 +1132,7 @@ dependencies = [
  "axum",
  "serde",
  "sqlx",
+ "thiserror",
  "tokio",
  "tracing",
  "tracing-subscriber",
