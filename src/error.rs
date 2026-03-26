@@ -4,4 +4,6 @@ use thiserror::Error;
 pub enum AppError {
     #[error("I/O Error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("SQLx Error: {0}")]
+    Sqlx(#[from] sqlx::Error),
 }
