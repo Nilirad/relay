@@ -4,6 +4,7 @@ use tracing::error;
 use crate::{error::AppError, state::AppState};
 
 mod error;
+mod model;
 mod state;
 
 #[tokio::main]
