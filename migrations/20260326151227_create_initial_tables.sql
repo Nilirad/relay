@@ -1,0 +1,21 @@
+CREATE TABLE branches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_url TEXT NOT NULL,
+    name TEXT NOT NULL,
+    last_commit_hash TEXT,
+    polling_interval_secs INTEGER NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE subscribers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    branch_id INTEGER NOT NULL,
+    target_repo TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    gh_app_installation_id INTEGER NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    FOREIGN KEY (branch_id) REFERENCES branches(id) ON DELETE CASCADE
+);
