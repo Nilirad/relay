@@ -5,6 +5,7 @@ use crate::{error::AppError, state::AppState};
 
 mod error;
 mod model;
+mod polling;
 mod state;
 
 #[tokio::main]
@@ -16,7 +17,11 @@ async fn run_app() -> Result<(), AppError> {
     tracing_subscriber::fmt::init();
 
     let pool = sqlx::SqlitePool::connect("sqlite://relay.db?mode=rwc").await?;
-    let state = AppState { db_pool: pool };
+    let state = AppState {
+        db_pool: pool.clone(),
+    };
+
+    polling::start_polling_engine(pool);
 
     let app = Router::new()
         .route("/health", get(|| async { "Relay Server is alive" }))
@@ -34,6 +39,9 @@ fn handle_app_error(app_error: AppError) {
             error!("{e}")
         }
         AppError::Sqlx(e) => {
+            error!("{e}")
+        }
+        AppError::Process(e) => {
             error!("{e}")
         }
     }
