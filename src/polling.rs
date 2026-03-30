@@ -2,37 +2,71 @@ use std::time::Duration;
 
 use futures::stream::{self, StreamExt};
 use sqlx::SqlitePool;
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
 use crate::{error::AppError, model::Branch};
 
-pub fn start_polling_engine(pool: SqlitePool) {
+pub fn start_polling_engine(pool: SqlitePool, token: CancellationToken) {
     tokio::spawn(async move {
         info!("Polling engine started");
-        loop {
-            let branches_result = gather_updated_branches(pool.clone()).await;
-            process_branches_result(&pool, branches_result).await;
-        }
+        polling_loop(pool, token).await;
     });
 }
 
-async fn process_branches_result(
-    pool: &sqlx::Pool<sqlx::Sqlite>,
-    branches_result: Result<Vec<(Branch, String)>, AppError>,
-) {
-    // TODO: Make rate configurable and specific for each subscription.
-    const SLEEP_MINS: u64 = 5;
-    const DB_ERROR_COOLDOWN_MINS: u64 = 5;
+async fn polling_loop(pool: SqlitePool, token: CancellationToken) {
+    loop {
+        tokio::select! {
+            _ = poll_branches(&pool, &token) => {}
+            _ = token.cancelled() => break,
+        }
+    }
+    info!("Gracefully shutting down polling engine");
+}
 
+async fn poll_branches(pool: &SqlitePool, token: &CancellationToken) {
+    let branches_result = gather_updated_branches(pool.clone()).await;
+    process_branches_result(pool, branches_result, token.clone()).await;
+}
+
+async fn process_branches_result(
+    pool: &SqlitePool,
+    branches_result: Result<Vec<(Branch, String)>, AppError>,
+    token: CancellationToken,
+) {
     match branches_result {
         Ok(branches) => {
-            write_updates_to_db(pool.clone(), branches).await;
-            tokio::time::sleep(Duration::from_mins(SLEEP_MINS)).await;
+            update_branches_table(pool, &token, branches).await;
         }
         Err(e) => {
-            error!("SQLx error: Could not read branches: {e}");
-            tokio::time::sleep(Duration::from_mins(DB_ERROR_COOLDOWN_MINS)).await;
+            handle_db_error(token, e).await;
         }
+    }
+}
+
+async fn update_branches_table(
+    pool: &SqlitePool,
+    token: &CancellationToken,
+    branches: Vec<(Branch, String)>,
+) {
+    // TODO: Make polling cooldown configurable and specific for each branch.
+    const SLEEP_MINS: u64 = 5;
+
+    write_updates_to_db(pool.clone(), branches).await;
+    tokio::select! {
+        _ = tokio::time::sleep(Duration::from_mins(SLEEP_MINS)) => {}
+        _ = token.cancelled() => {}
+    }
+}
+
+async fn handle_db_error(token: CancellationToken, e: AppError) {
+    // TODO: Make retry cooldown configurable.
+    const DB_ERROR_COOLDOWN_MINS: u64 = 5;
+
+    error!("SQLx error: Could not read branches: {e}");
+    tokio::select! {
+        _ = tokio::time::sleep(Duration::from_mins(DB_ERROR_COOLDOWN_MINS)) => {}
+        _ = token.cancelled() => {}
     }
 }
 
@@ -53,10 +87,7 @@ async fn gather_updated_branches(pool: SqlitePool) -> Result<Vec<(Branch, String
     Ok(branches)
 }
 
-async fn write_updates_to_db(
-    pool: sqlx::Pool<sqlx::Sqlite>,
-    updates_to_process: Vec<(Branch, String)>,
-) {
+async fn write_updates_to_db(pool: SqlitePool, updates_to_process: Vec<(Branch, String)>) {
     for (branch, hash) in updates_to_process {
         info!(
             "New commit detected for branch {}. Hash: {}",
@@ -77,7 +108,7 @@ async fn write_updates_to_db(
     }
 }
 
-async fn collect_branches(pool: sqlx::Pool<sqlx::Sqlite>) -> Result<Vec<Branch>, AppError> {
+async fn collect_branches(pool: SqlitePool) -> Result<Vec<Branch>, AppError> {
     let branches = sqlx::query_as::<_, Branch>("SELECT * FROM branches")
         .fetch_all(&pool)
         .await?;
@@ -91,7 +122,7 @@ async fn get_latest_hash(repo_url: String, branch: String) -> Result<String, App
         .args(["ls-remote", &repo_url, &branch])
         .output()
         .await
-        .map_err(|e| AppError::from(e))
+        .map_err(AppError::from)
         .and_then(handle_git_output_result)
         .and_then(extract_hash)
 }

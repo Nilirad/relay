@@ -1,4 +1,5 @@
 use axum::{Router, routing::get};
+use tokio_util::sync::CancellationToken;
 use tracing::error;
 
 use crate::{error::AppError, state::AppState};
@@ -21,7 +22,8 @@ async fn run_app() -> Result<(), AppError> {
         db_pool: pool.clone(),
     };
 
-    polling::start_polling_engine(pool);
+    let token = CancellationToken::new();
+    polling::start_polling_engine(pool, token.clone());
 
     let app = Router::new()
         .route("/health", get(|| async { "Relay Server is alive" }))
@@ -29,6 +31,8 @@ async fn run_app() -> Result<(), AppError> {
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
     println!("Server listening on http://0.0.0.0:3000");
     axum::serve(listener, app).await?;
+
+    token.cancel();
 
     Ok(())
 }
