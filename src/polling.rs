@@ -50,22 +50,22 @@ async fn update_branches_table(
     branches: Vec<(Branch, String)>,
 ) {
     // TODO: Make polling cooldown configurable and specific for each branch.
-    const SLEEP_MINS: u64 = 5;
+    const SLEEP_SECS: u64 = 5 * 60;
 
     write_updates_to_db(pool.clone(), branches).await;
     tokio::select! {
-        _ = tokio::time::sleep(Duration::from_mins(SLEEP_MINS)) => {}
+        _ = tokio::time::sleep(Duration::from_secs(SLEEP_SECS)) => {}
         _ = token.cancelled() => {}
     }
 }
 
 async fn handle_db_error(token: CancellationToken, e: AppError) {
     // TODO: Make retry cooldown configurable.
-    const DB_ERROR_COOLDOWN_MINS: u64 = 5;
+    const DB_ERROR_COOLDOWN_SECS: u64 = 5 * 60;
 
     error!("SQLx error: Could not read branches: {e}");
     tokio::select! {
-        _ = tokio::time::sleep(Duration::from_mins(DB_ERROR_COOLDOWN_MINS)) => {}
+        _ = tokio::time::sleep(Duration::from_secs(DB_ERROR_COOLDOWN_SECS)) => {}
         _ = token.cancelled() => {}
     }
 }
