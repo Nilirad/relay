@@ -5,8 +5,9 @@ use tracing::{error, info};
 
 use crate::{error::AppError, model::Branch};
 
-use self::{hash::*, update::*};
+use self::{branch::*, hash::*, update::*};
 
+mod branch;
 mod hash;
 mod update;
 
@@ -32,18 +33,19 @@ async fn poll_branches(pool: &SqlitePool, token: &CancellationToken) {
     process_branches_result(pool, branches_result, token.clone()).await;
 }
 
-async fn gather_updated_branches(pool: SqlitePool) -> Result<Vec<(Branch, String)>, AppError> {
+async fn gather_updated_branches(pool: SqlitePool) -> Result<Vec<BranchInfo>, AppError> {
     // TODO: Make buffer size configurable.
     const BUFFER_SIZE: usize = 3;
 
     let branches = stream::iter(collect_branches(pool).await?)
         .map(|b| async move {
-            let hash_result = get_latest_hash(b.repo_url.clone(), b.name.clone()).await;
-            (b, hash_result)
+            let latest_hash = get_latest_hash(b.repo_url.clone(), b.name.clone()).await;
+            // TODO: Handle error.
+            (b, latest_hash)
         })
         .buffer_unordered(BUFFER_SIZE)
         .filter_map(check_branch_for_updates)
-        .collect::<Vec<(Branch, String)>>()
+        .collect::<Vec<BranchInfo>>()
         .await;
 
     Ok(branches)
@@ -58,11 +60,14 @@ async fn collect_branches(pool: SqlitePool) -> Result<Vec<Branch>, AppError> {
 }
 
 async fn check_branch_for_updates(
-    (branch, hash_result): (Branch, Result<String, AppError>),
-) -> Option<(Branch, String)> {
-    match hash_result {
-        Ok(curr_hash) if branch.last_commit_hash.as_deref() != Some(&curr_hash) => {
-            Some((branch, curr_hash))
+    (branch, latest_hash_res): (Branch, Result<String, AppError>),
+) -> Option<BranchInfo> {
+    match latest_hash_res {
+        Ok(latest_hash) if branch.last_commit_hash.as_deref() != Some(&latest_hash) => {
+            Some(BranchInfo {
+                branch,
+                latest_hash,
+            })
         }
         Ok(_) => {
             info!("No new commit for branch {}", branch.name);

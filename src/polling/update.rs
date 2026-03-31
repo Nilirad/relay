@@ -4,11 +4,11 @@ use sqlx::SqlitePool;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
-use crate::{error::AppError, model::Branch};
+use crate::{error::AppError, model::Branch, polling::BranchInfo};
 
 pub(super) async fn process_branches_result(
     pool: &SqlitePool,
-    branches_result: Result<Vec<(Branch, String)>, AppError>,
+    branches_result: Result<Vec<BranchInfo>, AppError>,
     token: CancellationToken,
 ) {
     match branches_result {
@@ -24,7 +24,7 @@ pub(super) async fn process_branches_result(
 async fn update_branches_table(
     pool: &SqlitePool,
     token: &CancellationToken,
-    branches: Vec<(Branch, String)>,
+    branches: Vec<BranchInfo>,
 ) {
     // TODO: Make polling cooldown configurable and specific for each branch.
     const SLEEP_SECS: u64 = 5 * 60;
@@ -36,16 +36,20 @@ async fn update_branches_table(
     }
 }
 
-async fn write_updates_to_db(pool: SqlitePool, updates_to_process: Vec<(Branch, String)>) {
-    for (branch, hash) in updates_to_process {
+async fn write_updates_to_db(pool: SqlitePool, updates_to_process: Vec<BranchInfo>) {
+    for BranchInfo {
+        branch,
+        latest_hash,
+    } in updates_to_process
+    {
         info!(
             "New commit detected for branch {}. Hash: {}",
-            branch.name, hash
+            branch.name, latest_hash
         );
 
         let query_result = sqlx::query!(
             "UPDATE branches SET last_commit_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            hash,
+            latest_hash,
             branch.id
         )
         .execute(&pool)
