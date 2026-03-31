@@ -31,13 +31,13 @@ async fn polling_loop(pool: SqlitePool, token: CancellationToken) {
 }
 
 async fn poll_branches(pool: &SqlitePool) -> Result<(), AppError> {
-    let updated_branches = gather_updated_branches(pool.clone()).await?;
+    let updated_branches = gather_updated_branches(pool).await?;
     update_branches_table(pool, updated_branches).await;
 
     Ok(())
 }
 
-async fn gather_updated_branches(pool: SqlitePool) -> Result<Vec<BranchInfo>, AppError> {
+async fn gather_updated_branches(pool: &SqlitePool) -> Result<Vec<BranchInfo>, AppError> {
     // TODO: Make buffer size configurable.
     const BUFFER_SIZE: usize = 3;
 
@@ -60,9 +60,9 @@ async fn gather_updated_branches(pool: SqlitePool) -> Result<Vec<BranchInfo>, Ap
     Ok(updated_branches)
 }
 
-async fn collect_branches(pool: SqlitePool) -> Result<Vec<Branch>, AppError> {
+async fn collect_branches(pool: &SqlitePool) -> Result<Vec<Branch>, AppError> {
     let branches = sqlx::query_as::<_, Branch>("SELECT * FROM branches")
-        .fetch_all(&pool)
+        .fetch_all(pool)
         .await?;
 
     Ok(branches)
