@@ -4,7 +4,7 @@ use sqlx::SqlitePool;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
-use crate::{error::AppError, model::Branch, polling::BranchInfo};
+use crate::{error::AppError, polling::BranchInfo};
 
 pub(super) async fn process_branches_result(
     pool: &SqlitePool,
