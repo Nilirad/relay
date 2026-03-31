@@ -1,11 +1,13 @@
+use std::time::Duration;
+
 use futures::stream::{self, StreamExt};
 use sqlx::SqlitePool;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
-use crate::{error::AppError, model::Branch};
+use crate::{error::AppError, model::Branch, polling::update::update_branches_table};
 
-use self::{branch::*, hash::*, update::*};
+use self::{branch::*, hash::*};
 
 mod branch;
 mod hash;
@@ -21,16 +23,18 @@ pub fn start_polling_engine(pool: SqlitePool, token: CancellationToken) {
 async fn polling_loop(pool: SqlitePool, token: CancellationToken) {
     loop {
         tokio::select! {
-            _ = poll_branches(&pool, &token) => {}
+            res = poll_branches(&pool) => {followup_poll(res, &token).await}
             _ = token.cancelled() => break,
         }
     }
     info!("Gracefully shutting down polling engine");
 }
 
-async fn poll_branches(pool: &SqlitePool, token: &CancellationToken) {
-    let branches_result = gather_updated_branches(pool.clone()).await;
-    process_branches_result(pool, branches_result, token.clone()).await;
+async fn poll_branches(pool: &SqlitePool) -> Result<(), AppError> {
+    let updated_branches = gather_updated_branches(pool.clone()).await?;
+    update_branches_table(pool, updated_branches).await;
+
+    Ok(())
 }
 
 async fn gather_updated_branches(pool: SqlitePool) -> Result<Vec<BranchInfo>, AppError> {
@@ -74,4 +78,31 @@ async fn extract_branch_info(branch: Branch) -> Result<BranchInfo, AppError> {
 
 fn branch_has_updated(branch_info: &BranchInfo) -> bool {
     branch_info.branch.last_commit_hash.as_deref() != Some(&branch_info.latest_hash)
+}
+
+async fn followup_poll(res: Result<(), AppError>, token: &CancellationToken) {
+    // TODO: Make polling cooldown configurable and specific for each branch.
+    const SLEEP_SECS: u64 = 5 * 60;
+    match res {
+        Ok(_) => tokio::select! {
+            _ = tokio::time::sleep(Duration::from_secs(SLEEP_SECS)) => {}
+            _ = token.cancelled() => {}
+        },
+        Err(e) => handle_polling_error(e, token).await,
+    }
+}
+
+async fn handle_polling_error(error: AppError, token: &CancellationToken) {
+    // TODO: Make retry cooldown configurable.
+    const DB_ERROR_COOLDOWN_SECS: u64 = 5 * 60;
+
+    if let AppError::Sqlx(e) = error {
+        error!("{e}");
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_secs(DB_ERROR_COOLDOWN_SECS)) => {}
+            _ = token.cancelled() => {}
+        }
+    } else {
+        error!("Unexpected error raised: {error}");
+    }
 }
