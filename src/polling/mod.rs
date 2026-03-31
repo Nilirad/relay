@@ -37,18 +37,23 @@ async fn gather_updated_branches(pool: SqlitePool) -> Result<Vec<BranchInfo>, Ap
     // TODO: Make buffer size configurable.
     const BUFFER_SIZE: usize = 3;
 
-    let branches = stream::iter(collect_branches(pool).await?)
-        .map(|b| async move {
-            let latest_hash = get_latest_hash(b.repo_url.clone(), b.name.clone()).await;
-            // TODO: Handle error.
-            (b, latest_hash)
-        })
+    let branch_results = stream::iter(collect_branches(pool).await?)
+        .map(extract_branch_info)
         .buffer_unordered(BUFFER_SIZE)
-        .filter_map(check_branch_for_updates)
-        .collect::<Vec<BranchInfo>>()
+        .collect::<Vec<Result<BranchInfo, AppError>>>()
         .await;
 
-    Ok(branches)
+    let errs = branch_results.iter().filter_map(|res| res.as_ref().err());
+    for e in errs {
+        error!("Error fetching branch update: {e}");
+    }
+
+    let updated_branches = branch_results
+        .into_iter()
+        .filter_map(|res| res.ok())
+        .filter(branch_has_updated)
+        .collect();
+    Ok(updated_branches)
 }
 
 async fn collect_branches(pool: SqlitePool) -> Result<Vec<Branch>, AppError> {
@@ -59,23 +64,14 @@ async fn collect_branches(pool: SqlitePool) -> Result<Vec<Branch>, AppError> {
     Ok(branches)
 }
 
-async fn check_branch_for_updates(
-    (branch, latest_hash_res): (Branch, Result<String, AppError>),
-) -> Option<BranchInfo> {
-    match latest_hash_res {
-        Ok(latest_hash) if branch.last_commit_hash.as_deref() != Some(&latest_hash) => {
-            Some(BranchInfo {
-                branch,
-                latest_hash,
-            })
-        }
-        Ok(_) => {
-            info!("No new commit for branch {}", branch.name);
-            None
-        }
-        Err(e) => {
-            error!("Error while checking branch {}: {}", branch.name, e);
-            None
-        }
-    }
+async fn extract_branch_info(branch: Branch) -> Result<BranchInfo, AppError> {
+    let latest_hash = get_latest_hash(branch.repo_url.clone(), branch.name.clone()).await?;
+    Ok(BranchInfo {
+        branch,
+        latest_hash,
+    })
+}
+
+fn branch_has_updated(branch_info: &BranchInfo) -> bool {
+    branch_info.branch.last_commit_hash.as_deref() != Some(&branch_info.latest_hash)
 }
