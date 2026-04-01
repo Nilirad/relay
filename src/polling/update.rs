@@ -1,6 +1,6 @@
 use futures::{StreamExt, TryFutureExt, stream};
 use sqlx::SqlitePool;
-use tracing::{error, info};
+use tracing::{info, warn};
 
 use crate::{error::AppError, polling::BranchInfo};
 
@@ -12,7 +12,7 @@ pub(super) async fn update_branches_table(pool: &SqlitePool, branch_infos: Vec<B
 
     let errs = query_results.iter().filter_map(|res| res.as_ref().err());
     for e in errs {
-        error!("{e}");
+        warn!("{e}");
     }
 
     let query_outcomes = query_results.into_iter().filter_map(|res| res.ok());

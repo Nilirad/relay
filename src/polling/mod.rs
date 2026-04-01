@@ -3,7 +3,7 @@ use std::time::Duration;
 use futures::stream::{self, StreamExt};
 use sqlx::SqlitePool;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::{error::AppError, model::Branch, polling::update::update_branches_table};
 
@@ -49,7 +49,7 @@ async fn gather_updated_branches(pool: &SqlitePool) -> Result<Vec<BranchInfo>, A
 
     let errs = branch_results.iter().filter_map(|res| res.as_ref().err());
     for e in errs {
-        error!("Error fetching branch update: {e}");
+        warn!("Error fetching branch update: {e}");
     }
 
     let updated_branches = branch_results
