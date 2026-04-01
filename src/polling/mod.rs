@@ -1,17 +1,21 @@
 use std::time::Duration;
 
-use futures::stream::{self, StreamExt};
 use sqlx::SqlitePool;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, warn};
+use tracing::info;
 
-use crate::{error::AppError, model::Branch, polling::update::update_branches_table};
-
-use self::{branch::*, hash::*};
+use crate::{
+    error::AppError,
+    polling::{
+        db::{gather_updated_branches, update_branches_table},
+        error::handle_polling_error,
+    },
+};
 
 mod branch;
-mod hash;
-mod update;
+mod db;
+mod error;
+mod git;
 
 pub fn start_polling_engine(pool: SqlitePool, token: CancellationToken) {
     tokio::spawn(async move {
@@ -37,49 +41,6 @@ async fn poll_branches(pool: &SqlitePool) -> Result<(), AppError> {
     Ok(())
 }
 
-async fn gather_updated_branches(pool: &SqlitePool) -> Result<Vec<BranchInfo>, AppError> {
-    // TODO: Make buffer size configurable.
-    const BUFFER_SIZE: usize = 3;
-
-    let branch_results = stream::iter(collect_branches(pool).await?)
-        .map(extract_branch_info)
-        .buffer_unordered(BUFFER_SIZE)
-        .collect::<Vec<Result<BranchInfo, AppError>>>()
-        .await;
-
-    let errs = branch_results.iter().filter_map(|res| res.as_ref().err());
-    for e in errs {
-        warn!("Error fetching branch update: {e}");
-    }
-
-    let updated_branches = branch_results
-        .into_iter()
-        .filter_map(|res| res.ok())
-        .filter(branch_has_updated)
-        .collect();
-    Ok(updated_branches)
-}
-
-async fn collect_branches(pool: &SqlitePool) -> Result<Vec<Branch>, AppError> {
-    let branches = sqlx::query_as::<_, Branch>("SELECT * FROM branches")
-        .fetch_all(pool)
-        .await?;
-
-    Ok(branches)
-}
-
-async fn extract_branch_info(branch: Branch) -> Result<BranchInfo, AppError> {
-    let latest_hash = get_latest_hash(branch.repo_url.clone(), branch.name.clone()).await?;
-    Ok(BranchInfo {
-        branch,
-        latest_hash,
-    })
-}
-
-fn branch_has_updated(branch_info: &BranchInfo) -> bool {
-    branch_info.branch.last_commit_hash.as_deref() != Some(&branch_info.latest_hash)
-}
-
 async fn followup_poll(res: Result<(), AppError>, token: &CancellationToken) {
     // TODO: Make polling cooldown configurable and specific for each branch.
     const SLEEP_SECS: u64 = 5 * 60;
@@ -89,45 +50,5 @@ async fn followup_poll(res: Result<(), AppError>, token: &CancellationToken) {
             _ = token.cancelled() => {}
         },
         Err(e) => handle_polling_error(e, token).await,
-    }
-}
-
-async fn handle_polling_error(error: AppError, token: &CancellationToken) {
-    if let AppError::Sqlx(e) = error {
-        handle_sqlx_error(e, token).await;
-    } else {
-        error!("Unexpected error raised: {error}");
-    }
-}
-
-async fn handle_sqlx_error(error: sqlx::Error, token: &CancellationToken) {
-    // TODO: Make retry cooldown configurable.
-    const DB_ERROR_COOLDOWN_SECS: u64 = 5 * 60;
-
-    let mut critical = false;
-    match error {
-        sqlx::Error::Database(e) => {
-            if e.is_unique_violation() {
-                warn!("Attempted duplicate insertion of unique value: {e}");
-            } else {
-                critical = true;
-                error!("Database error: {e}");
-            }
-        }
-        sqlx::Error::Io(e) => {
-            critical = true;
-            error!("Database I/O error: {e}");
-        }
-        e => {
-            critical = true;
-            error!("{e}")
-        }
-    }
-
-    if critical {
-        tokio::select! {
-            _ = tokio::time::sleep(Duration::from_secs(DB_ERROR_COOLDOWN_SECS)) => {}
-            _ = token.cancelled() => {}
-        }
     }
 }

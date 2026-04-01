@@ -2,7 +2,36 @@ use futures::{StreamExt, TryFutureExt, stream};
 use sqlx::SqlitePool;
 use tracing::{info, warn};
 
-use crate::{error::AppError, polling::BranchInfo};
+use crate::{
+    error::AppError,
+    model::Branch,
+    polling::branch::{BranchInfo, branch_has_updated, extract_branch_info},
+};
+
+pub(super) async fn gather_updated_branches(
+    pool: &SqlitePool,
+) -> Result<Vec<BranchInfo>, AppError> {
+    // TODO: Make buffer size configurable.
+    const BUFFER_SIZE: usize = 3;
+
+    let branch_results = stream::iter(collect_branches(pool).await?)
+        .map(extract_branch_info)
+        .buffer_unordered(BUFFER_SIZE)
+        .collect::<Vec<Result<BranchInfo, AppError>>>()
+        .await;
+
+    let errs = branch_results.iter().filter_map(|res| res.as_ref().err());
+    for e in errs {
+        warn!("Error fetching branch update: {e}");
+    }
+
+    let updated_branches = branch_results
+        .into_iter()
+        .filter_map(|res| res.ok())
+        .filter(branch_has_updated)
+        .collect();
+    Ok(updated_branches)
+}
 
 pub(super) async fn update_branches_table(pool: &SqlitePool, branch_infos: Vec<BranchInfo>) {
     let query_results = stream::iter(branch_infos)
@@ -22,6 +51,14 @@ pub(super) async fn update_branches_table(pool: &SqlitePool, branch_infos: Vec<B
             outcome.branch.name, outcome.latest_hash
         );
     }
+}
+
+async fn collect_branches(pool: &SqlitePool) -> Result<Vec<Branch>, AppError> {
+    let branches = sqlx::query_as::<_, Branch>("SELECT * FROM branches")
+        .fetch_all(pool)
+        .await?;
+
+    Ok(branches)
 }
 
 async fn write_db(branch_info: BranchInfo, pool: &SqlitePool) -> Result<BranchInfo, AppError> {
