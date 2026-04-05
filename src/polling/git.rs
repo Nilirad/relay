@@ -1,6 +1,10 @@
+//! Operations to fetch and extract git branch data from remote repositories.
+
 use crate::error::AppError;
 
-/// Extracts the latest commit of a branch in a git repository.
+/// Returns the latest commit of a branch in a remote git repository.
+///
+/// Runs the command `git ls-remote`.
 pub(super) async fn get_latest_hash(repo_url: String, branch: String) -> Result<String, AppError> {
     tokio::process::Command::new("git")
         .args(["ls-remote", &repo_url, &branch])
@@ -11,6 +15,7 @@ pub(super) async fn get_latest_hash(repo_url: String, branch: String) -> Result<
         .and_then(|stdout| extract_hash(stdout, repo_url, branch))
 }
 
+/// Analyzes the `git` exit status to handle process output.
 fn handle_git_output_result(output: std::process::Output) -> Result<Vec<u8>, AppError> {
     if output.status.success() {
         Ok(output.stdout)
@@ -24,6 +29,7 @@ fn handle_git_output_result(output: std::process::Output) -> Result<Vec<u8>, App
     }
 }
 
+/// Extracts the commit hash from a `git ls-remote` process stdout.
 fn extract_hash(stdout: Vec<u8>, repo_url: String, branch: String) -> Result<String, AppError> {
     String::from_utf8_lossy(&stdout)
         .split_whitespace()

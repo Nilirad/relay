@@ -1,3 +1,5 @@
+//! Asynchronous task to periodically check for updated remote branches.
+
 use std::time::Duration;
 
 use sqlx::SqlitePool;
@@ -17,6 +19,7 @@ mod db;
 mod error;
 mod git;
 
+/// Spawns an asynchronous task to periodically poll git branches for updates.
 pub fn start_polling_engine(pool: SqlitePool, token: CancellationToken) {
     tokio::spawn(async move {
         info!("Polling engine started");
@@ -24,6 +27,7 @@ pub fn start_polling_engine(pool: SqlitePool, token: CancellationToken) {
     });
 }
 
+/// Controls whether to shut down the polling engine or run a polling cycle.
 async fn polling_loop(pool: SqlitePool, token: CancellationToken) {
     loop {
         tokio::select! {
@@ -34,6 +38,7 @@ async fn polling_loop(pool: SqlitePool, token: CancellationToken) {
     info!("Gracefully shutting down polling engine");
 }
 
+/// Orchestrates polling operations.
 async fn poll_branches(pool: &SqlitePool) -> Result<(), AppError> {
     let updated_branches = gather_updated_branches(pool).await?;
     update_branches_table(pool, updated_branches).await;
@@ -41,6 +46,7 @@ async fn poll_branches(pool: &SqlitePool) -> Result<(), AppError> {
     Ok(())
 }
 
+/// Handles polling results and puts the task to sleep.
 async fn followup_poll(res: Result<(), AppError>, token: &CancellationToken) {
     // TODO: Make polling cooldown configurable and specific for each branch.
     const SLEEP_SECS: u64 = 5 * 60;

@@ -1,3 +1,5 @@
+//! Database operations for the polling engine.
+
 use futures::{StreamExt, TryFutureExt, stream};
 use sqlx::SqlitePool;
 use tracing::{info, warn};
@@ -8,6 +10,7 @@ use crate::{
     polling::branch::{BranchInfo, branch_has_updated, extract_branch_info},
 };
 
+/// Gathers stored branches that need to be updated.
 pub(super) async fn gather_updated_branches(
     pool: &SqlitePool,
 ) -> Result<Vec<BranchInfo>, AppError> {
@@ -33,6 +36,7 @@ pub(super) async fn gather_updated_branches(
     Ok(updated_branches)
 }
 
+/// Updates branch rows with the latest hash.
 pub(super) async fn update_branches_table(pool: &SqlitePool, branch_infos: Vec<BranchInfo>) {
     let query_results = stream::iter(branch_infos)
         .then(|b_info| write_db(b_info, pool))
@@ -53,6 +57,7 @@ pub(super) async fn update_branches_table(pool: &SqlitePool, branch_infos: Vec<B
     }
 }
 
+/// Collects all branch rows.
 async fn collect_branches(pool: &SqlitePool) -> Result<Vec<Branch>, AppError> {
     let branches = sqlx::query_as::<_, Branch>("SELECT * FROM branches")
         .fetch_all(pool)
@@ -61,6 +66,7 @@ async fn collect_branches(pool: &SqlitePool) -> Result<Vec<Branch>, AppError> {
     Ok(branches)
 }
 
+/// Writes the updated branch hash to the row.
 async fn write_db(branch_info: BranchInfo, pool: &SqlitePool) -> Result<BranchInfo, AppError> {
     sqlx::query!(
         "UPDATE branches SET last_commit_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
