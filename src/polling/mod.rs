@@ -41,7 +41,7 @@ async fn polling_loop(pool: SqlitePool, token: CancellationToken) {
 /// Orchestrates polling operations.
 async fn poll_branches(pool: &SqlitePool) -> Result<(), AppError> {
     let updated_branches = gather_updated_branches(pool).await?;
-    update_branches_table(pool, updated_branches).await;
+    update_branches_table(pool, updated_branches).await?;
 
     Ok(())
 }
