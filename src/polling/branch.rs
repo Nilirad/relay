@@ -10,16 +10,18 @@ pub(super) struct BranchInfo {
     pub latest_hash: String,
 }
 
-/// Creates a [`BranchInfo`] given a branch row.
-pub(super) async fn extract_branch_info(branch: Branch) -> Result<BranchInfo, AppError> {
-    let latest_hash = get_latest_hash(branch.repo_url.clone(), branch.name.clone()).await?;
-    Ok(BranchInfo {
-        branch,
-        latest_hash,
-    })
-}
+impl BranchInfo {
+    /// Creates a [`BranchInfo`] given a branch row.
+    pub async fn new(branch: Branch) -> Result<BranchInfo, AppError> {
+        let latest_hash = get_latest_hash(branch.repo_url.clone(), branch.name.clone()).await?;
+        Ok(BranchInfo {
+            branch,
+            latest_hash,
+        })
+    }
 
-/// Checks [`BranchInfo`] data to detect whether the branch has updated.
-pub(super) fn branch_has_updated(branch_info: &BranchInfo) -> bool {
-    branch_info.branch.last_commit_hash.as_deref() != Some(&branch_info.latest_hash)
+    /// Checks whether the branch has updated.
+    pub fn has_updated(&self) -> bool {
+        self.branch.last_commit_hash.as_deref() != Some(&self.latest_hash)
+    }
 }

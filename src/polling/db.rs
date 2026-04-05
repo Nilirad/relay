@@ -4,11 +4,7 @@ use futures::{StreamExt, TryFutureExt, stream};
 use sqlx::SqlitePool;
 use tracing::{info, warn};
 
-use crate::{
-    error::AppError,
-    model::Branch,
-    polling::branch::{BranchInfo, branch_has_updated, extract_branch_info},
-};
+use crate::{error::AppError, model::Branch, polling::branch::BranchInfo};
 
 /// Gathers stored branches that need to be updated.
 pub(super) async fn gather_updated_branches(
@@ -18,7 +14,7 @@ pub(super) async fn gather_updated_branches(
     const BUFFER_SIZE: usize = 3;
 
     let branch_results = stream::iter(collect_branches(pool).await?)
-        .map(extract_branch_info)
+        .map(BranchInfo::new)
         .buffer_unordered(BUFFER_SIZE)
         .collect::<Vec<Result<BranchInfo, AppError>>>()
         .await;
@@ -31,7 +27,7 @@ pub(super) async fn gather_updated_branches(
     let updated_branches = branch_results
         .into_iter()
         .filter_map(|res| res.ok())
-        .filter(branch_has_updated)
+        .filter(BranchInfo::has_updated)
         .collect();
     Ok(updated_branches)
 }
