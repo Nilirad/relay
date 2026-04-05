@@ -17,10 +17,11 @@ async fn handle_sqlx_error(error: sqlx::Error, token: &CancellationToken) {
     // TODO: Make retry cooldown configurable.
     const DB_ERROR_COOLDOWN_SECS: u64 = 5 * 60;
 
-    let mut critical = false;
+    let critical;
     match error {
         sqlx::Error::Database(e) => {
             if e.is_unique_violation() {
+                critical = false;
                 warn!("Attempted duplicate insertion of unique value: {e}");
             } else {
                 critical = true;
