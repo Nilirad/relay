@@ -9,10 +9,15 @@ use crate::error::AppError;
 
 /// Handles polling engine errors.
 pub(super) async fn handle_polling_error(error: AppError, token: &CancellationToken) {
+    const DEFAULT_ERROR_SLEEP_SECS: u64 = 5 * 60;
     if let AppError::Sqlx(e) = error {
         handle_sqlx_error(e, token).await;
     } else {
         error!("Unexpected error raised: {error}");
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_secs(DEFAULT_ERROR_SLEEP_SECS)) => {}
+            _ = token.cancelled() => {}
+        }
     }
 }
 
