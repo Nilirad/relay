@@ -6,4 +6,6 @@ pub enum AppError {
     Io(#[from] std::io::Error),
     #[error("SQLx Error: {0}")]
     Sqlx(#[from] sqlx::Error),
+    #[error("Process failed: {0}")]
+    Process(String),
 }
