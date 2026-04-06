@@ -12,6 +12,13 @@ pub struct Branch {
     pub updated_at: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct CreateBranch {
+    pub repo_url: String,
+    pub name: String,
+    pub polling_interval_secs: i32,
+}
+
 #[derive(Debug, Serialize, Deserialize, FromRow)]
 pub struct Subscriber {
     pub id: i64,
