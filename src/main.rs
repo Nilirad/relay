@@ -5,7 +5,11 @@ use axum::{
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 
-use crate::{error::AppError, handler::create_branch, state::AppState};
+use crate::{
+    error::AppError,
+    handler::{create_branch, create_subscriber},
+    state::AppState,
+};
 
 mod error;
 mod handler;
@@ -33,6 +37,7 @@ async fn run_app() -> Result<(), AppError> {
     let app = Router::new()
         .route("/health", get(|| async { "Relay Server is alive" }))
         .route("/branches", post(create_branch))
+        .route("/subscribers", post(create_subscriber))
         .with_state(state);
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
     println!("Server listening on http://0.0.0.0:3000");
