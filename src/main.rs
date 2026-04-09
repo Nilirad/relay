@@ -1,14 +1,18 @@
-use axum::{routing::{get, post}, Router};
+use axum::{
+    Router,
+    routing::{get, post},
+};
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 
-use crate::{error::AppError, state::AppState, handler::create_branch};
+use crate::{error::AppError, handler::create_branch, state::AppState};
 
 mod error;
+mod handler;
 mod model;
 mod polling;
 mod state;
-mod handler;
+mod trigger;
 
 #[tokio::main]
 async fn main() {
@@ -48,6 +52,12 @@ fn handle_app_error(app_error: AppError) {
             error!("{e}")
         }
         AppError::Process(e) => {
+            error!("{e}")
+        }
+        AppError::SystemTime(e) => {
+            error!("{e}")
+        }
+        AppError::Jwt(e) => {
             error!("{e}")
         }
     }
