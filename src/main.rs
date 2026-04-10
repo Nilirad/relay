@@ -71,5 +71,8 @@ fn handle_app_error(app_error: AppError) {
         AppError::Jwt(e) => {
             error!("{e}")
         }
+        AppError::ChannelSend(e) => {
+            error!("{e}")
+        }
     }
 }

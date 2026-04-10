@@ -25,19 +25,19 @@ mod git;
 pub fn start_polling_engine(
     pool: SqlitePool,
     token: CancellationToken,
-    _tx: Sender<BranchUpdateEvent>,
+    tx: Sender<BranchUpdateEvent>,
 ) {
     tokio::spawn(async move {
         info!("Polling engine started");
-        polling_loop(pool, token).await;
+        polling_loop(pool, token, tx).await;
     });
 }
 
 /// Controls whether to shut down the polling engine or run a polling cycle.
-async fn polling_loop(pool: SqlitePool, token: CancellationToken) {
+async fn polling_loop(pool: SqlitePool, token: CancellationToken, tx: Sender<BranchUpdateEvent>) {
     loop {
         tokio::select! {
-            res = poll_branches(&pool) => {followup_poll(res, &token).await}
+            res = poll_branches(&pool, &tx) => {followup_poll(res, &token).await}
             _ = token.cancelled() => break,
         }
     }
@@ -45,9 +45,9 @@ async fn polling_loop(pool: SqlitePool, token: CancellationToken) {
 }
 
 /// Orchestrates polling operations.
-async fn poll_branches(pool: &SqlitePool) -> Result<(), AppError> {
+async fn poll_branches(pool: &SqlitePool, tx: &Sender<BranchUpdateEvent>) -> Result<(), AppError> {
     let updated_branches = gather_updated_branches(pool).await?;
-    update_branches_table(pool, updated_branches).await?;
+    update_branches_table(pool, updated_branches, tx).await?;
 
     Ok(())
 }

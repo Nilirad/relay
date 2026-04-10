@@ -5,6 +5,9 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use thiserror::Error;
+use tokio::sync::mpsc::error::SendError;
+
+use crate::events::BranchUpdateEvent;
 
 #[derive(Debug, Error)]
 pub enum AppError {
@@ -18,6 +21,8 @@ pub enum AppError {
     SystemTime(#[from] SystemTimeError),
     #[error("JWT Error: {0}")]
     Jwt(#[from] jsonwebtoken::errors::Error),
+    #[error("Channel send error: {0}")]
+    ChannelSend(#[from] SendError<BranchUpdateEvent>),
 }
 
 impl IntoResponse for AppError {
