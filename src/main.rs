@@ -7,11 +7,13 @@ use tracing::error;
 
 use crate::{
     error::AppError,
+    events::BranchUpdateEvent,
     handler::{create_branch, create_subscriber},
     state::AppState,
 };
 
 mod error;
+mod events;
 mod handler;
 mod model;
 mod polling;
@@ -24,6 +26,8 @@ async fn main() {
 }
 
 async fn run_app() -> Result<(), AppError> {
+    const BRANCH_UPDATE_EVENT_BUFFER_SIZE: usize = 64;
+
     tracing_subscriber::fmt::init();
 
     let pool = sqlx::SqlitePool::connect("sqlite://relay.db?mode=rwc").await?;
@@ -32,7 +36,9 @@ async fn run_app() -> Result<(), AppError> {
     };
 
     let token = CancellationToken::new();
-    polling::start_polling_engine(pool, token.clone());
+    let (tx, rx) = tokio::sync::mpsc::channel::<BranchUpdateEvent>(BRANCH_UPDATE_EVENT_BUFFER_SIZE);
+    polling::start_polling_engine(pool.clone(), token.clone(), tx);
+    trigger::start_trigger_engine(pool, token.clone(), rx);
 
     let app = Router::new()
         .route("/health", get(|| async { "Relay Server is alive" }))

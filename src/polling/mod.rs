@@ -3,11 +3,13 @@
 use std::time::Duration;
 
 use sqlx::SqlitePool;
+use tokio::sync::mpsc::Sender;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use crate::{
     error::AppError,
+    events::BranchUpdateEvent,
     polling::{
         db::{gather_updated_branches, update_branches_table},
         error::handle_polling_error,
@@ -20,7 +22,11 @@ mod error;
 mod git;
 
 /// Spawns an asynchronous task to periodically poll git branches for updates.
-pub fn start_polling_engine(pool: SqlitePool, token: CancellationToken) {
+pub fn start_polling_engine(
+    pool: SqlitePool,
+    token: CancellationToken,
+    _tx: Sender<BranchUpdateEvent>,
+) {
     tokio::spawn(async move {
         info!("Polling engine started");
         polling_loop(pool, token).await;
