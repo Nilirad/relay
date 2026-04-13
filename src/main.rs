@@ -74,5 +74,11 @@ fn handle_app_error(app_error: AppError) {
         AppError::ChannelSend(e) => {
             error!("{e}")
         }
+        AppError::Client(e) => {
+            error!("{e}")
+        }
+        AppError::Response(e) => {
+            error!("{e}")
+        }
     }
 }

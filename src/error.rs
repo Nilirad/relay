@@ -23,6 +23,10 @@ pub enum AppError {
     Jwt(#[from] jsonwebtoken::errors::Error),
     #[error("Channel send error: {0}")]
     ChannelSend(#[from] SendError<BranchUpdateEvent>),
+    #[error("Client error: {0}")]
+    Client(#[from] reqwest::Error),
+    #[error("Response error: {0}")]
+    Response(String),
 }
 
 impl IntoResponse for AppError {
