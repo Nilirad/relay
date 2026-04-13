@@ -27,14 +27,14 @@ pub async fn create_subscriber(
     Json(payload): Json<CreateSubscriber>,
 ) -> Result<Json<Subscriber>, AppError> {
     let mut transaction = state.db_pool.begin().await?;
-    let branch_id = get_or_insert_branch_id(&mut *transaction, &payload).await?;
+    let branch_id = get_or_insert_branch_id(&mut transaction, &payload).await?;
     let subscriber = sqlx::query_as::<_, Subscriber>(
         "INSERT INTO subscribers (branch_id, target_repo, event_type, gh_app_installation_id) VALUES (?, ?, ?, ?) RETURNING *"
     )
     .bind(branch_id)
     .bind(&payload.target_repo)
     .bind(&payload.event_type)
-    .bind(&payload.gh_app_installation_id)
+    .bind(payload.gh_app_installation_id)
     .fetch_one(&mut *transaction)
     .await?;
     transaction.commit().await?;
