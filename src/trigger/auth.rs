@@ -1,7 +1,9 @@
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use tracing::info;
 
-use crate::error::AppError;
+use crate::{error::AppError, model::Subscriber};
 
 /// Payload that GitHub expects in the JWT.
 #[derive(Debug, Serialize, Deserialize)]
@@ -39,4 +41,39 @@ pub(super) fn generate_gh_jwt(client_id: &str, pem_path: &str) -> Result<String,
 
     let jwt = encode(&header, &claims, &key)?;
     Ok(jwt)
+}
+
+pub(super) async fn request_iat(
+    http_client: &Client,
+    jwt: &str,
+    sub: &Subscriber,
+) -> Result<String, AppError> {
+    #[derive(serde::Deserialize)]
+    struct IatResponse {
+        token: String,
+    }
+
+    let api_url = format!(
+        "https://api.github.com/app/installations/{}/access_tokens",
+        sub.gh_app_installation_id
+    );
+    let response = http_client
+        .post(&api_url)
+        .bearer_auth(jwt)
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2026-03-10")
+        .send()
+        .await?;
+
+    if response.status().is_success() {
+        let response_json = response.json::<IatResponse>().await?;
+        info!("IAT received for subscriber {}", sub.target_repo);
+        Ok(response_json.token)
+    } else {
+        Err(AppError::Response(format!(
+            "Unexpected status {}: {}",
+            response.status(),
+            response.text().await?
+        )))
+    }
 }
