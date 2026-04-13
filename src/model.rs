@@ -29,3 +29,13 @@ pub struct Subscriber {
     pub created_at: String,
     pub updated_at: String,
 }
+
+#[derive(Debug, Deserialize)]
+pub struct CreateSubscriber {
+    pub source_repo_url: String,
+    pub source_branch_name: String,
+    pub polling_interval_secs: i64,
+    pub target_repo: String,
+    pub event_type: String,
+    pub gh_app_installation_id: i64,
+}

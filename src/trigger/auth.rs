@@ -1,0 +1,79 @@
+use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
+use tracing::info;
+
+use crate::{error::AppError, model::Subscriber};
+
+/// Payload that GitHub expects in the JWT.
+#[derive(Debug, Serialize, Deserialize)]
+struct GitHubClaims {
+    /// Issued at time (UNIX time).
+    iat: u64,
+    /// Expiration time (UNIX time).
+    exp: u64,
+    /// Issuer: GitHub App's Client ID.
+    iss: String,
+}
+
+/// Generates a JWT to authenticate access to the GitHub App.
+///
+/// Implementation based on [GitHub's documentation][jwt_docs].
+///
+/// [jwt_docs]: https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-json-web-token-jwt-for-a-github-app
+pub(super) fn generate_gh_jwt(client_id: &str, pem_path: &str) -> Result<String, AppError> {
+    // TODO: Check if you should use Tokio API.
+    let pem = std::fs::read(pem_path)?;
+
+    const CLOCK_DRIFT_BUFFER_SECS: u64 = 60;
+    const TOKEN_VALIDITY_SECS: u64 = 5 * 60;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs();
+    let claims = GitHubClaims {
+        iat: now - CLOCK_DRIFT_BUFFER_SECS,
+        exp: now + TOKEN_VALIDITY_SECS,
+        iss: client_id.to_string(),
+    };
+
+    let header = Header::new(Algorithm::RS256);
+    let key = EncodingKey::from_rsa_pem(&pem)?;
+
+    let jwt = encode(&header, &claims, &key)?;
+    Ok(jwt)
+}
+
+pub(super) async fn request_iat(
+    http_client: &Client,
+    jwt: &str,
+    sub: &Subscriber,
+) -> Result<String, AppError> {
+    #[derive(serde::Deserialize)]
+    struct IatResponse {
+        token: String,
+    }
+
+    let api_url = format!(
+        "https://api.github.com/app/installations/{}/access_tokens",
+        sub.gh_app_installation_id
+    );
+    let response = http_client
+        .post(&api_url)
+        .bearer_auth(jwt)
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2026-03-10")
+        .send()
+        .await?;
+
+    if response.status().is_success() {
+        let response_json = response.json::<IatResponse>().await?;
+        info!("IAT received for subscriber {}", sub.target_repo);
+        Ok(response_json.token)
+    } else {
+        Err(AppError::Response(format!(
+            "Unexpected status {}: {}",
+            response.status(),
+            response.text().await?
+        )))
+    }
+}

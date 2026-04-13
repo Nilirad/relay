@@ -4,7 +4,10 @@ use futures::{StreamExt, stream};
 use sqlx::SqlitePool;
 use tracing::{info, warn};
 
-use crate::{error::AppError, model::Branch, polling::branch::BranchInfo};
+use crate::{
+    error::AppError, events::BranchUpdateEvent, model::Branch, polling::branch::BranchInfo,
+};
+use tokio::sync::mpsc::Sender;
 
 /// Gathers stored branches that need to be updated.
 pub(super) async fn gather_updated_branches(
@@ -36,6 +39,7 @@ pub(super) async fn gather_updated_branches(
 pub(super) async fn update_branches_table(
     pool: &SqlitePool,
     branch_infos: Vec<BranchInfo>,
+    tx: &Sender<BranchUpdateEvent>,
 ) -> Result<(), AppError> {
     // Prevents opening a transaction for nothing.
     if branch_infos.is_empty() {
@@ -53,6 +57,12 @@ pub(super) async fn update_branches_table(
             "New commit detected for branch {}. Hash: {}",
             outcome.branch.name, outcome.latest_hash
         );
+
+        let event = BranchUpdateEvent {
+            branch_id: outcome.branch.id,
+            new_hash: outcome.latest_hash.clone(),
+        };
+        tx.send(event).await?;
     }
 
     Ok(())
