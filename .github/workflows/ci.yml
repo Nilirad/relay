@@ -45,11 +45,13 @@ jobs:
       - name: Toolchain Setup
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install Nextest
+        uses: taiki-e/install-action@nextest
+
       - name: Cache
         uses: Swatinem/rust-cache@v2
 
       - name: Tests
-        uses: taiki-e/install-action@nextest
         run: cargo nextest --locked --all-features
 
       - name: Build
