@@ -1,3 +1,6 @@
+#![doc = include_str!("../README.md")]
+#![warn(missing_docs, clippy::missing_docs_in_private_items)]
+
 use axum::{
     Router,
     routing::{get, post},
@@ -22,9 +25,10 @@ mod trigger;
 
 #[tokio::main]
 async fn main() {
-    run_app().await.unwrap_or_else(handle_app_error);
+    run_app().await.unwrap_or_else(|e| error!("{e}"));
 }
 
+/// Runs the server, delegating errors to the caller.
 async fn run_app() -> Result<(), AppError> {
     const BRANCH_UPDATE_EVENT_BUFFER_SIZE: usize = 64;
 
@@ -52,33 +56,4 @@ async fn run_app() -> Result<(), AppError> {
     token.cancel();
 
     Ok(())
-}
-
-fn handle_app_error(app_error: AppError) {
-    match app_error {
-        AppError::Io(e) => {
-            error!("{e}")
-        }
-        AppError::Sqlx(e) => {
-            error!("{e}")
-        }
-        AppError::Process(e) => {
-            error!("{e}")
-        }
-        AppError::SystemTime(e) => {
-            error!("{e}")
-        }
-        AppError::Jwt(e) => {
-            error!("{e}")
-        }
-        AppError::ChannelSend(e) => {
-            error!("{e}")
-        }
-        AppError::Client(e) => {
-            error!("{e}")
-        }
-        AppError::Response(e) => {
-            error!("{e}")
-        }
-    }
 }

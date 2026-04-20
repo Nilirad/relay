@@ -1,3 +1,5 @@
+//! Asynchronous task to trigger remote repository workflows.
+
 use std::env;
 
 use reqwest::Client;
@@ -15,6 +17,10 @@ use crate::{
 
 mod auth;
 
+/// Spawns an asynchronous task to trigger repository workflows.
+///
+/// The spawned task will listen to [`BranchUpdateEvent`]s,
+/// triggering a workflow for each event it receives.
 pub fn start_trigger_engine(
     pool: SqlitePool,
     token: CancellationToken,
@@ -27,6 +33,7 @@ pub fn start_trigger_engine(
     });
 }
 
+/// Controls whether to shut down the trigger engine or process a [`BranchUpdateEvent`].
 async fn trigger_loop(
     pool: SqlitePool,
     http_client: Client,
@@ -42,6 +49,7 @@ async fn trigger_loop(
     info!("Gracefully shutting down trigger engine");
 }
 
+/// Handles a [`BranchUpdateEvent`], handling any possible error.
 async fn handle_branch_update(pool: &SqlitePool, http_client: &Client, event: BranchUpdateEvent) {
     let result = dispatch_events(pool, http_client, event).await;
 
@@ -50,6 +58,7 @@ async fn handle_branch_update(pool: &SqlitePool, http_client: &Client, event: Br
     }
 }
 
+/// Sends a `repository_dispatch` event for each relevant [`Subscriber`].
 async fn dispatch_events(
     pool: &SqlitePool,
     http_client: &Client,
@@ -78,6 +87,7 @@ async fn dispatch_events(
     Ok(())
 }
 
+/// Gets all the [`Subscriber`]s subscribed to the [`BranchUpdateEvent`].
 async fn get_subscribers(
     pool: &SqlitePool,
     event: &BranchUpdateEvent,
@@ -91,6 +101,8 @@ async fn get_subscribers(
     Ok(subscribers)
 }
 
+/// Manages IAT authentication,
+/// and sends a `repository_dispatch` event to the specified [`Subscriber`].
 async fn notify_subscriber(
     http_client: &Client,
     jwt: &str,
@@ -102,6 +114,7 @@ async fn notify_subscriber(
     Ok(())
 }
 
+/// Sends a `repository_dispatch` event to the specified [`Subscriber`].
 async fn send_repository_dispatch(
     http_client: &Client,
     iat: &str,
@@ -147,6 +160,7 @@ async fn send_repository_dispatch(
     }
 }
 
+/// Creates a new HTTP client.
 fn build_http_client() -> Client {
     const USER_AGENT: &str = "nilirad-relay-server";
 

@@ -1,3 +1,5 @@
+//! Authentication and authorization to request services.
+
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -6,12 +8,19 @@ use tracing::info;
 use crate::{error::AppError, model::Subscriber};
 
 /// Payload that GitHub expects in the JWT.
+///
+/// Read more on [GitHub's documentation][jwt_docs].
+///
+/// <!-- LINKS -->
+/// [jwt_docs]: https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-json-web-token-jwt-for-a-github-app
 #[derive(Debug, Serialize, Deserialize)]
 struct GitHubClaims {
     /// Issued at time (UNIX time).
     iat: u64,
+
     /// Expiration time (UNIX time).
     exp: u64,
+
     /// Issuer: GitHub App's Client ID.
     iss: String,
 }
@@ -20,6 +29,7 @@ struct GitHubClaims {
 ///
 /// Implementation based on [GitHub's documentation][jwt_docs].
 ///
+/// <!-- LINKS -->
 /// [jwt_docs]: https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-json-web-token-jwt-for-a-github-app
 pub(super) fn generate_gh_jwt(client_id: &str, pem_path: &str) -> Result<String, AppError> {
     // TODO: Check if you should use Tokio API.
@@ -43,6 +53,13 @@ pub(super) fn generate_gh_jwt(client_id: &str, pem_path: &str) -> Result<String,
     Ok(jwt)
 }
 
+/// Requests an Installation Access Token (IAT)
+/// to operate on a GitHub App installation.
+///
+/// Implementation based on [GitHub's documentation][iat_docs].
+///
+/// <!-- LINKS -->
+/// [iat_docs]: https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-an-installation-access-token-for-a-github-app
 pub(super) async fn request_iat(
     http_client: &Client,
     jwt: &str,

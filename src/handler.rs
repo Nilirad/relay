@@ -1,9 +1,12 @@
+//! Axum route handlers.
+
 use crate::error::AppError;
 use crate::model::{Branch, CreateBranch, CreateSubscriber, Subscriber};
 use crate::state::AppState;
 use axum::{Json, extract::State};
 use tracing::info;
 
+/// Stores a new [`Branch`] in the database.
 pub async fn create_branch(
     State(state): State<AppState>,
     Json(payload): Json<CreateBranch>,
@@ -22,6 +25,7 @@ pub async fn create_branch(
     Ok(Json(branch))
 }
 
+/// Stores a new [`Subscriber`] in the database.
 pub async fn create_subscriber(
     State(state): State<AppState>,
     Json(payload): Json<CreateSubscriber>,
@@ -44,6 +48,9 @@ pub async fn create_subscriber(
     Ok(Json(subscriber))
 }
 
+/// Gets the branch ID specified in the [`CreateSubscriber`] payload.
+///
+/// If the branch doesn't exist, it is created and its ID is returned.
 async fn get_or_insert_branch_id(
     transaction: &mut sqlx::SqliteConnection,
     payload: &CreateSubscriber,

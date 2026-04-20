@@ -6,6 +6,7 @@ use crate::{error::AppError, model::Branch, polling::git::get_latest_hash};
 pub(super) struct BranchInfo {
     /// The branch currently stored in the database.
     pub branch: Branch,
+
     /// The actual branch hash.
     pub latest_hash: String,
 }
