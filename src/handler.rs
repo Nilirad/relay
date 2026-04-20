@@ -12,11 +12,10 @@ pub async fn create_branch(
     Json(payload): Json<CreateBranch>,
 ) -> Result<Json<Branch>, AppError> {
     let branch = sqlx::query_as::<_, Branch>(
-        "INSERT INTO branches (repo_url, name, polling_interval_secs) VALUES (?, ?, ?) RETURNING *",
+        "INSERT INTO branches (repo_url, name) VALUES (?, ?) RETURNING *",
     )
     .bind(&payload.repo_url)
     .bind(&payload.name)
-    .bind(payload.polling_interval_secs)
     .fetch_one(&state.db_pool)
     .await?;
 
@@ -55,7 +54,6 @@ async fn get_or_insert_branch_id(
     transaction: &mut sqlx::SqliteConnection,
     payload: &CreateSubscriber,
 ) -> Result<i64, AppError> {
-    let polling_interval_secs = payload.polling_interval_secs;
     let branch_id_opt =
         sqlx::query_scalar::<_, i64>("SELECT id FROM branches WHERE repo_url = ? AND name = ?")
             .bind(&payload.source_repo_url)
@@ -68,11 +66,10 @@ async fn get_or_insert_branch_id(
     }
 
     sqlx::query_scalar::<_, i64>(
-        "INSERT INTO branches (repo_url, name, polling_interval_secs) VALUES (?, ?, ?) RETURNING id"
+        "INSERT INTO branches (repo_url, name) VALUES (?, ?) RETURNING id"
     )
     .bind(&payload.source_repo_url)
     .bind(&payload.source_branch_name)
-    .bind(polling_interval_secs)
     .fetch_one(&mut *transaction)
     .await
     .map_err(Into::into)

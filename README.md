@@ -74,12 +74,10 @@ curl -X POST http://localhost:3000/subscribers \
     "source_branch_name": "BRANCH_NAME",
     "target_repo": "YOUR_REPOSITORY",
     "event_type": "EVENT_TYPE",
-    "gh_app_installation_id": YOUR_INSTALLATION_ID,
-    "polling_interval_secs": ANY_INTEGER
+    "gh_app_installation_id": YOUR_INSTALLATION_ID
   }'
 ```
 
-`"polling_interval_secs"` currently has no effect.
 Make sure that `EVENT_TYPE` is the same
 as the one defined in the workflow.
 
