@@ -36,6 +36,9 @@ jobs:
       - name: Clippy
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
 
+      - name: Documentation
+        run: cargo doc --locked --all-features --no-deps --document-private-items
+
   test_and_build:
     name: Test and Build
     needs: [lint]
