@@ -1,3 +1,6 @@
+#![doc = include_str!("../README.md")]
+#![warn(missing_docs, clippy::missing_docs_in_private_items)]
+
 use axum::{
     Router,
     routing::{get, post},
@@ -25,6 +28,7 @@ async fn main() {
     run_app().await.unwrap_or_else(|e| error!("{e}"));
 }
 
+/// Runs the server, delegating errors to the caller.
 async fn run_app() -> Result<(), AppError> {
     const BRANCH_UPDATE_EVENT_BUFFER_SIZE: usize = 64;
 
