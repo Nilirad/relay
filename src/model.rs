@@ -23,9 +23,6 @@ pub struct Branch {
     /// `None` if the branch has not been processed.
     pub last_commit_hash: Option<String>,
 
-    /// Has no effect.
-    pub polling_interval_secs: i32,
-
     /// Timestamp when the record was created, in standard SQL `DATETIME` format (`YYYY-MM-DD HH:MM:SS`).
     pub created_at: String,
 
@@ -41,9 +38,6 @@ pub struct CreateBranch {
 
     /// Determines the value of [`Branch::name`].
     pub name: String,
-
-    /// Determines the value of [`Branch::polling_interval_secs`].
-    pub polling_interval_secs: i32,
 }
 
 /// Represents a row in the `subscribers` table.
@@ -87,9 +81,6 @@ pub struct CreateSubscriber {
 
     /// Determines the value of [`Branch::name`].
     pub source_branch_name: String,
-
-    /// Determines the value of [`Branch::polling_interval_secs`].
-    pub polling_interval_secs: i64,
 
     /// Determines the value of [`Subscriber::target_repo`].
     pub target_repo: String,

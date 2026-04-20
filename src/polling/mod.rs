@@ -54,7 +54,7 @@ async fn poll_branches(pool: &SqlitePool, tx: &Sender<BranchUpdateEvent>) -> Res
 
 /// Handles polling results and puts the task to sleep.
 async fn followup_poll(res: Result<(), AppError>, token: &CancellationToken) {
-    // TODO: Make polling cooldown configurable and specific for each branch.
+    // TODO: Make polling cooldown configurable.
     const SLEEP_SECS: u64 = 5 * 60;
     match res {
         Ok(_) => tokio::select! {
