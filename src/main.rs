@@ -5,6 +5,7 @@ use axum::{
     Router,
     routing::{get, post},
 };
+use reqwest::Client;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 
@@ -39,10 +40,12 @@ async fn run_app() -> Result<(), FatalError> {
         db_pool: pool.clone(),
     };
 
+    let http_client = build_http_client()?;
+
     let token = CancellationToken::new();
     let (tx, rx) = tokio::sync::mpsc::channel::<BranchUpdateEvent>(BRANCH_UPDATE_EVENT_BUFFER_SIZE);
     polling::start_polling_engine(pool.clone(), token.clone(), tx);
-    trigger::start_trigger_engine(pool, token.clone(), rx);
+    trigger::start_trigger_engine(pool, http_client, token.clone(), rx);
 
     let app = Router::new()
         .route("/health", get(|| async { "Relay Server is alive" }))
@@ -60,4 +63,13 @@ async fn run_app() -> Result<(), FatalError> {
     token.cancel();
 
     Ok(())
+}
+
+/// Creates a new HTTP client.
+pub fn build_http_client() -> Result<Client, FatalError> {
+    const USER_AGENT: &str = "nilirad-relay-server";
+
+    let client = Client::builder().user_agent(USER_AGENT).build()?;
+
+    Ok(client)
 }

@@ -23,10 +23,10 @@ mod auth;
 /// triggering a workflow for each event it receives.
 pub fn start_trigger_engine(
     pool: SqlitePool,
+    http_client: Client,
     token: CancellationToken,
     rx: Receiver<BranchUpdateEvent>,
 ) {
-    let http_client = build_http_client();
     tokio::spawn(async move {
         info!("Trigger engine started");
         trigger_loop(pool, http_client, token, rx).await;
@@ -158,14 +158,4 @@ async fn send_repository_dispatch(
             response.text().await?
         )))
     }
-}
-
-/// Creates a new HTTP client.
-fn build_http_client() -> Client {
-    const USER_AGENT: &str = "nilirad-relay-server";
-
-    Client::builder()
-        .user_agent(USER_AGENT)
-        .build()
-        .expect("Failed to build HTTP client")
 }
