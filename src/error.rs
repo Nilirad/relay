@@ -52,3 +52,26 @@ impl IntoResponse for AppError {
         (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()).into_response()
     }
 }
+
+/// An error that requires the server to be shut down.
+#[derive(Debug, Error)]
+pub enum FatalError {
+    /// Database is down or URL is incorrect.
+    #[error("Database connection: {0}")]
+    DbConnection(#[from] sqlx::Error),
+
+    /// Could not reserve an IP address with a TCP port
+    /// to connect to the server.
+    #[error("TCP binding: {0}")]
+    TcpBinding(#[source] std::io::Error),
+
+    /// I/O error during server's execution loop.
+    #[error("Serve: {0}")]
+    Serve(#[source] std::io::Error),
+
+    /// HTTP Client creation failed.
+    ///
+    /// The server cannot trigger workflows.
+    #[error("HTTP Client creation: {0}")]
+    ClientCreation(#[from] reqwest::Error),
+}

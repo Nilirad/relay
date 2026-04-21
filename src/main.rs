@@ -9,7 +9,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::error;
 
 use crate::{
-    error::AppError,
+    error::FatalError,
     events::BranchUpdateEvent,
     handler::{create_branch, create_subscriber},
     state::AppState,
@@ -29,7 +29,7 @@ async fn main() {
 }
 
 /// Runs the server, delegating errors to the caller.
-async fn run_app() -> Result<(), AppError> {
+async fn run_app() -> Result<(), FatalError> {
     const BRANCH_UPDATE_EVENT_BUFFER_SIZE: usize = 64;
 
     tracing_subscriber::fmt::init();
@@ -49,9 +49,13 @@ async fn run_app() -> Result<(), AppError> {
         .route("/branches", post(create_branch))
         .route("/subscribers", post(create_subscriber))
         .with_state(state);
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
+        .await
+        .map_err(FatalError::TcpBinding)?;
     println!("Server listening on http://0.0.0.0:3000");
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .await
+        .map_err(FatalError::Serve)?;
 
     token.cancel();
 
