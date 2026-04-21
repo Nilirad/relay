@@ -79,5 +79,5 @@ pub enum FatalError {
 ///
 /// The server cannot trigger workflows.
 #[derive(Debug, Error)]
-#[error("HTTP Client creation: {0}")]
+#[error(transparent)]
 pub struct ClientCreationError(#[from] reqwest::Error);
