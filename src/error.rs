@@ -69,9 +69,15 @@ pub enum FatalError {
     #[error("Serve: {0}")]
     Serve(#[source] std::io::Error),
 
-    /// HTTP Client creation failed.
-    ///
-    /// The server cannot trigger workflows.
+    // Docs deferred to inner type.
+    #[allow(clippy::missing_docs_in_private_items)]
     #[error("HTTP Client creation: {0}")]
-    ClientCreation(#[from] reqwest::Error),
+    ClientCreation(#[from] ClientCreationError),
 }
+
+/// HTTP Client creation failed.
+///
+/// The server cannot trigger workflows.
+#[derive(Debug, Error)]
+#[error("HTTP Client creation: {0}")]
+pub struct ClientCreationError(#[from] reqwest::Error);

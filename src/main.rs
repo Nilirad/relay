@@ -10,7 +10,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::error;
 
 use crate::{
-    error::FatalError,
+    error::{ClientCreationError, FatalError},
     events::BranchUpdateEvent,
     handler::{create_branch, create_subscriber},
     state::AppState,
@@ -66,7 +66,7 @@ async fn run_app() -> Result<(), FatalError> {
 }
 
 /// Creates a new HTTP client.
-pub fn build_http_client() -> Result<Client, FatalError> {
+pub fn build_http_client() -> Result<Client, ClientCreationError> {
     const USER_AGENT: &str = "nilirad-relay-server";
 
     let client = Client::builder().user_agent(USER_AGENT).build()?;
