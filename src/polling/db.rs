@@ -5,7 +5,10 @@ use sqlx::SqlitePool;
 use tracing::{info, warn};
 
 use crate::{
-    error::AppError, events::BranchUpdateEvent, model::Branch, polling::branch::BranchInfo,
+    error::{AppError, CommitHashError},
+    events::BranchUpdateEvent,
+    model::Branch,
+    polling::branch::BranchInfo,
 };
 use tokio::sync::mpsc::Sender;
 
@@ -19,12 +22,12 @@ pub(super) async fn gather_updated_branches(
     let branch_results = stream::iter(collect_branches(pool).await?)
         .map(BranchInfo::new)
         .buffer_unordered(BUFFER_SIZE)
-        .collect::<Vec<Result<BranchInfo, AppError>>>()
+        .collect::<Vec<Result<BranchInfo, CommitHashError>>>()
         .await;
 
     let errs = branch_results.iter().filter_map(|res| res.as_ref().err());
     for e in errs {
-        warn!("Error fetching branch update: {e}");
+        warn!("{e}");
     }
 
     let updated_branches = branch_results

@@ -38,10 +38,6 @@ pub enum AppError {
     #[error("Client error: {0}")]
     Client(#[from] reqwest::Error),
 
-    /// A spawned process returned an error or an unsuccessful result.
-    #[error("Process failed: {0}")]
-    Process(String),
-
     /// A failing HTTP response.
     #[error("Response error: {0}")]
     Response(String),
@@ -81,3 +77,28 @@ pub enum FatalError {
 #[derive(Debug, Error)]
 #[error(transparent)]
 pub struct ClientCreationError(#[from] reqwest::Error);
+
+/// Error in retrieving a commit or its info using `git ls-remote`.
+#[derive(Debug, Error)]
+pub enum CommitHashError {
+    /// I/O error while spawning the process.
+    #[error("I/O error in `git ls-remote`: {0}")]
+    Io(#[from] std::io::Error),
+
+    /// Unexpected exit status.
+    #[error("Unexpected `git ls-remote` exit status: {0}")]
+    UnexpectedStatus(String),
+
+    /// Unexpected output format.
+    #[error(
+        "Unexpected `git ls-remote` output format. Repo: {repo_url}; Branch: {branch}; Stdout: {stdout}"
+    )]
+    UnexpectedOutput {
+        /// The process output text.
+        stdout: String,
+        /// The relevant git repository URL.
+        repo_url: String,
+        /// The relevant git branch.
+        branch: String,
+    },
+}
