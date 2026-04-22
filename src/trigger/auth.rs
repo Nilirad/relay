@@ -5,7 +5,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
-use crate::{error::AppError, model::Subscriber};
+use crate::{model::Subscriber, trigger::error::AuthError};
 
 /// Payload that GitHub expects in the JWT.
 ///
@@ -31,7 +31,7 @@ struct GitHubClaims {
 ///
 /// <!-- LINKS -->
 /// [jwt_docs]: https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-json-web-token-jwt-for-a-github-app
-pub(super) fn generate_gh_jwt(client_id: &str, pem_path: &str) -> Result<String, AppError> {
+pub(super) fn generate_gh_jwt(client_id: &str, pem_path: &str) -> Result<String, AuthError> {
     // TODO: Check if you should use Tokio API.
     let pem = std::fs::read(pem_path)?;
 
@@ -64,7 +64,7 @@ pub(super) async fn request_iat(
     http_client: &Client,
     jwt: &str,
     sub: &Subscriber,
-) -> Result<String, AppError> {
+) -> Result<String, AuthError> {
     #[derive(serde::Deserialize)]
     struct IatResponse {
         token: String,
@@ -87,10 +87,9 @@ pub(super) async fn request_iat(
         info!("IAT received for subscriber {}", sub.target_repo);
         Ok(response_json.token)
     } else {
-        Err(AppError::Response(format!(
-            "Unexpected status {}: {}",
-            response.status(),
-            response.text().await?
-        )))
+        Err(AuthError::Response {
+            status: response.status(),
+            text: response.text().await?,
+        })
     }
 }
