@@ -2,20 +2,14 @@
 
 use futures::{StreamExt, stream};
 use sqlx::SqlitePool;
-use tracing::{info, warn};
+use tracing::warn;
 
-use crate::{
-    error::{AppError, CommitHashError},
-    events::BranchUpdateEvent,
-    model::Branch,
-    polling::branch::BranchInfo,
-};
-use tokio::sync::mpsc::Sender;
+use crate::{error::CommitHashError, model::Branch, polling::branch::BranchInfo};
 
 /// Gathers stored branches that need to be updated.
 pub(super) async fn gather_updated_branches(
     pool: &SqlitePool,
-) -> Result<Vec<BranchInfo>, AppError> {
+) -> Result<Vec<BranchInfo>, sqlx::Error> {
     // TODO: Make buffer size configurable.
     const BUFFER_SIZE: usize = 3;
 
@@ -41,38 +35,24 @@ pub(super) async fn gather_updated_branches(
 /// Updates branch rows with the latest hash.
 pub(super) async fn update_branches_table(
     pool: &SqlitePool,
-    branch_infos: Vec<BranchInfo>,
-    tx: &Sender<BranchUpdateEvent>,
-) -> Result<(), AppError> {
+    branch_infos: &[BranchInfo],
+) -> Result<(), sqlx::Error> {
     // Prevents opening a transaction for nothing.
     if branch_infos.is_empty() {
         return Ok(());
     }
 
     let mut transaction = pool.begin().await?;
-    for branch_info in &branch_infos {
+    for branch_info in branch_infos {
         write_db(branch_info, &mut *transaction).await?;
     }
     transaction.commit().await?;
-
-    for outcome in branch_infos {
-        info!(
-            "New commit detected for branch {}. Hash: {}",
-            outcome.branch.name, outcome.latest_hash
-        );
-
-        let event = BranchUpdateEvent {
-            branch_id: outcome.branch.id,
-            new_hash: outcome.latest_hash.clone(),
-        };
-        tx.send(event).await?;
-    }
 
     Ok(())
 }
 
 /// Collects all branch rows.
-async fn collect_branches(pool: &SqlitePool) -> Result<Vec<Branch>, AppError> {
+async fn collect_branches(pool: &SqlitePool) -> Result<Vec<Branch>, sqlx::Error> {
     let branches = sqlx::query_as::<_, Branch>("SELECT * FROM branches")
         .fetch_all(pool)
         .await?;
@@ -81,7 +61,7 @@ async fn collect_branches(pool: &SqlitePool) -> Result<Vec<Branch>, AppError> {
 }
 
 /// Writes the updated branch hash to the row.
-async fn write_db<'e, E>(branch_info: &BranchInfo, executor: E) -> Result<(), AppError>
+async fn write_db<'e, E>(branch_info: &BranchInfo, executor: E) -> Result<(), sqlx::Error>
 where
     E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
 {

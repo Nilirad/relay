@@ -2,22 +2,30 @@
 
 use std::time::Duration;
 
+use thiserror::Error;
+use tokio::sync::mpsc::error::SendError;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, warn};
 
-use crate::error::AppError;
+use crate::events::BranchUpdateEvent;
+
+/// An error that interrupted a polling loop iteration.
+#[derive(Debug, Error)]
+pub enum PollingError {
+    /// Could not read or write database.
+    #[error("Database operation failed: {0}")]
+    DatabaseOperation(#[from] sqlx::Error),
+
+    /// Could not send a [`BranchUpdateEvent`].
+    #[error("Could not send branch update event: {0}")]
+    Channel(#[from] SendError<BranchUpdateEvent>),
+}
 
 /// Handles polling engine errors.
-pub(super) async fn handle_polling_error(error: AppError, token: &CancellationToken) {
-    const DEFAULT_ERROR_SLEEP_SECS: u64 = 5 * 60;
-    if let AppError::Sqlx(e) = error {
-        handle_sqlx_error(e, token).await;
-    } else {
-        error!("Unexpected error raised: {error}");
-        tokio::select! {
-            _ = tokio::time::sleep(Duration::from_secs(DEFAULT_ERROR_SLEEP_SECS)) => {}
-            _ = token.cancelled() => {}
-        }
+pub(super) async fn handle_polling_error(error: PollingError, token: &CancellationToken) {
+    match error {
+        PollingError::DatabaseOperation(e) => handle_sqlx_error(e, token).await,
+        PollingError::Channel(e) => handle_channel_error(e, token).await,
     }
 }
 
@@ -52,5 +60,16 @@ async fn handle_sqlx_error(error: sqlx::Error, token: &CancellationToken) {
             _ = tokio::time::sleep(Duration::from_secs(DB_ERROR_COOLDOWN_SECS)) => {}
             _ = token.cancelled() => {}
         }
+    }
+}
+
+/// Handles an error of type [`PollingError::Channel`].
+async fn handle_channel_error(error: SendError<BranchUpdateEvent>, token: &CancellationToken) {
+    const DEFAULT_ERROR_SLEEP_SECS: u64 = 5 * 60;
+
+    warn!("{error}");
+    tokio::select! {
+        _ = tokio::time::sleep(Duration::from_secs(DEFAULT_ERROR_SLEEP_SECS)) => {}
+        _ = token.cancelled() => {}
     }
 }
