@@ -3,10 +3,10 @@
 use reqwest::Client;
 use sqlx::SqlitePool;
 use tokio::sync::mpsc::Receiver;
-use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
 use crate::{
+    context::SharedContext,
     events::BranchUpdateEvent,
     model::Subscriber,
     trigger::{
@@ -14,6 +14,8 @@ use crate::{
         error::{RequestError, WorkflowTriggerError},
     },
 };
+
+pub use auth::*;
 
 mod auth;
 mod error;
@@ -23,32 +25,28 @@ mod error;
 /// The spawned task will listen to [`BranchUpdateEvent`]s,
 /// triggering a workflow for each event it receives.
 pub fn start_trigger_engine(
-    pool: SqlitePool,
+    ctx: SharedContext,
     http_client: Client,
-    token: CancellationToken,
     rx: Receiver<BranchUpdateEvent>,
-    client_id: String,
-    pem_path: String,
+    creds: AuthCredentials,
 ) {
     tokio::spawn(async move {
         info!("Trigger engine started");
-        trigger_loop(pool, http_client, token, rx, client_id, pem_path).await;
+        trigger_loop(ctx, http_client, rx, creds).await;
     });
 }
 
 /// Controls whether to shut down the trigger engine or process a [`BranchUpdateEvent`].
 async fn trigger_loop(
-    pool: SqlitePool,
+    ctx: SharedContext,
     http_client: Client,
-    token: CancellationToken,
     mut rx: Receiver<BranchUpdateEvent>,
-    client_id: String,
-    pem_path: String,
+    creds: AuthCredentials,
 ) {
     loop {
         tokio::select! {
-            Some(event) = rx.recv() => handle_branch_update(&pool, &http_client, event, &client_id, &pem_path).await,
-            _ = token.cancelled() => break,
+            Some(event) = rx.recv() => handle_branch_update(&ctx.db_pool, &http_client, event, &creds).await,
+            _ = ctx.token.cancelled() => break,
         }
     }
     info!("Gracefully shutting down trigger engine");
@@ -59,10 +57,9 @@ async fn handle_branch_update(
     pool: &SqlitePool,
     http_client: &Client,
     event: BranchUpdateEvent,
-    client_id: &str,
-    pem_path: &str,
+    creds: &AuthCredentials,
 ) {
-    let result = dispatch_events(pool, http_client, event, client_id, pem_path).await;
+    let result = dispatch_events(pool, http_client, event, creds).await;
 
     if let Err(e) = result {
         error!("{e}");
@@ -74,8 +71,7 @@ async fn dispatch_events(
     pool: &SqlitePool,
     http_client: &Client,
     event: BranchUpdateEvent,
-    client_id: &str,
-    pem_path: &str,
+    creds: &AuthCredentials,
 ) -> Result<(), WorkflowTriggerError> {
     info!(
         "Received update event for branch {}: {}",
@@ -84,7 +80,7 @@ async fn dispatch_events(
 
     let subscribers = get_subscribers(pool, &event).await?;
 
-    let jwt = generate_gh_jwt(client_id, pem_path)?;
+    let jwt = generate_gh_jwt(creds)?;
 
     for sub in subscribers {
         let result = notify_subscriber(http_client, &jwt, &event, sub).await;
