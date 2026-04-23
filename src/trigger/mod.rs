@@ -15,6 +15,8 @@ use crate::{
     },
 };
 
+pub use auth::*;
+
 mod auth;
 mod error;
 
@@ -27,12 +29,11 @@ pub fn start_trigger_engine(
     http_client: Client,
     token: CancellationToken,
     rx: Receiver<BranchUpdateEvent>,
-    client_id: String,
-    pem_path: String,
+    creds: AuthCredentials,
 ) {
     tokio::spawn(async move {
         info!("Trigger engine started");
-        trigger_loop(pool, http_client, token, rx, client_id, pem_path).await;
+        trigger_loop(pool, http_client, token, rx, creds).await;
     });
 }
 
@@ -42,12 +43,11 @@ async fn trigger_loop(
     http_client: Client,
     token: CancellationToken,
     mut rx: Receiver<BranchUpdateEvent>,
-    client_id: String,
-    pem_path: String,
+    creds: AuthCredentials,
 ) {
     loop {
         tokio::select! {
-            Some(event) = rx.recv() => handle_branch_update(&pool, &http_client, event, &client_id, &pem_path).await,
+            Some(event) = rx.recv() => handle_branch_update(&pool, &http_client, event, &creds).await,
             _ = token.cancelled() => break,
         }
     }
@@ -59,10 +59,9 @@ async fn handle_branch_update(
     pool: &SqlitePool,
     http_client: &Client,
     event: BranchUpdateEvent,
-    client_id: &str,
-    pem_path: &str,
+    creds: &AuthCredentials,
 ) {
-    let result = dispatch_events(pool, http_client, event, client_id, pem_path).await;
+    let result = dispatch_events(pool, http_client, event, creds).await;
 
     if let Err(e) = result {
         error!("{e}");
@@ -74,8 +73,7 @@ async fn dispatch_events(
     pool: &SqlitePool,
     http_client: &Client,
     event: BranchUpdateEvent,
-    client_id: &str,
-    pem_path: &str,
+    creds: &AuthCredentials,
 ) -> Result<(), WorkflowTriggerError> {
     info!(
         "Received update event for branch {}: {}",
@@ -84,7 +82,7 @@ async fn dispatch_events(
 
     let subscribers = get_subscribers(pool, &event).await?;
 
-    let jwt = generate_gh_jwt(client_id, pem_path)?;
+    let jwt = generate_gh_jwt(creds)?;
 
     for sub in subscribers {
         let result = notify_subscriber(http_client, &jwt, &event, sub).await;
