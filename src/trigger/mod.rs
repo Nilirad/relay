@@ -3,10 +3,10 @@
 use reqwest::Client;
 use sqlx::SqlitePool;
 use tokio::sync::mpsc::Receiver;
-use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
 use crate::{
+    context::SharedContext,
     events::BranchUpdateEvent,
     model::Subscriber,
     trigger::{
@@ -25,30 +25,28 @@ mod error;
 /// The spawned task will listen to [`BranchUpdateEvent`]s,
 /// triggering a workflow for each event it receives.
 pub fn start_trigger_engine(
-    pool: SqlitePool,
+    ctx: SharedContext,
     http_client: Client,
-    token: CancellationToken,
     rx: Receiver<BranchUpdateEvent>,
     creds: AuthCredentials,
 ) {
     tokio::spawn(async move {
         info!("Trigger engine started");
-        trigger_loop(pool, http_client, token, rx, creds).await;
+        trigger_loop(ctx, http_client, rx, creds).await;
     });
 }
 
 /// Controls whether to shut down the trigger engine or process a [`BranchUpdateEvent`].
 async fn trigger_loop(
-    pool: SqlitePool,
+    ctx: SharedContext,
     http_client: Client,
-    token: CancellationToken,
     mut rx: Receiver<BranchUpdateEvent>,
     creds: AuthCredentials,
 ) {
     loop {
         tokio::select! {
-            Some(event) = rx.recv() => handle_branch_update(&pool, &http_client, event, &creds).await,
-            _ = token.cancelled() => break,
+            Some(event) = rx.recv() => handle_branch_update(&ctx.db_pool, &http_client, event, &creds).await,
+            _ = ctx.token.cancelled() => break,
         }
     }
     info!("Gracefully shutting down trigger engine");

@@ -17,6 +17,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::error;
 
 use crate::{
+    context::SharedContext,
     error::{ClientCreationError, FatalError},
     events::BranchUpdateEvent,
     handler::{create_branch, create_subscriber},
@@ -24,6 +25,7 @@ use crate::{
     trigger::get_auth_credentials,
 };
 
+mod context;
 mod error;
 mod events;
 mod handler;
@@ -52,9 +54,13 @@ async fn run_app() -> Result<(), FatalError> {
     let creds = get_auth_credentials()?;
 
     let token = CancellationToken::new();
+    let ctx = SharedContext {
+        db_pool: pool.clone(),
+        token: token.clone(),
+    };
     let (tx, rx) = tokio::sync::mpsc::channel::<BranchUpdateEvent>(BRANCH_UPDATE_EVENT_BUFFER_SIZE);
-    polling::start_polling_engine(pool.clone(), token.clone(), tx);
-    trigger::start_trigger_engine(pool, http_client, token.clone(), rx, creds);
+    polling::start_polling_engine(ctx.clone(), tx);
+    trigger::start_trigger_engine(ctx, http_client, rx, creds);
 
     let app = Router::new()
         .route("/health", get(|| async { "Relay Server is alive" }))

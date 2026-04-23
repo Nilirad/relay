@@ -8,6 +8,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use crate::{
+    context::SharedContext,
     events::BranchUpdateEvent,
     polling::{
         branch::BranchInfo,
@@ -22,23 +23,19 @@ mod error;
 mod git;
 
 /// Spawns an asynchronous task to periodically poll git branches for updates.
-pub fn start_polling_engine(
-    pool: SqlitePool,
-    token: CancellationToken,
-    tx: Sender<BranchUpdateEvent>,
-) {
+pub fn start_polling_engine(ctx: SharedContext, tx: Sender<BranchUpdateEvent>) {
     tokio::spawn(async move {
         info!("Polling engine started");
-        polling_loop(pool, token, tx).await;
+        polling_loop(ctx, tx).await;
     });
 }
 
 /// Controls whether to shut down the polling engine or run a polling cycle.
-async fn polling_loop(pool: SqlitePool, token: CancellationToken, tx: Sender<BranchUpdateEvent>) {
+async fn polling_loop(ctx: SharedContext, tx: Sender<BranchUpdateEvent>) {
     loop {
         tokio::select! {
-            res = poll_branches(&pool, &tx) => {followup_poll(res, &token).await}
-            _ = token.cancelled() => break,
+            res = poll_branches(&ctx.db_pool, &tx) => {followup_poll(res, &ctx.token).await}
+            _ = ctx.token.cancelled() => break,
         }
     }
     info!("Gracefully shutting down polling engine");
