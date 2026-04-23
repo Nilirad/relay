@@ -40,6 +40,10 @@ pub enum FatalError {
     #[allow(clippy::missing_docs_in_private_items)]
     #[error("HTTP Client creation: {0}")]
     ClientCreation(#[from] ClientCreationError),
+
+    /// Environment variable not set.
+    #[error("Environment variable '{0}' not set")]
+    EnvVarNotSet(String),
 }
 
 /// HTTP Client creation failed.

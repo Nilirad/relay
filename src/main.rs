@@ -48,11 +48,19 @@ async fn run_app() -> Result<(), FatalError> {
     };
 
     let http_client = build_http_client()?;
+    let (gh_client_id, gh_app_key_path) = read_environment_variables()?;
 
     let token = CancellationToken::new();
     let (tx, rx) = tokio::sync::mpsc::channel::<BranchUpdateEvent>(BRANCH_UPDATE_EVENT_BUFFER_SIZE);
     polling::start_polling_engine(pool.clone(), token.clone(), tx);
-    trigger::start_trigger_engine(pool, http_client, token.clone(), rx);
+    trigger::start_trigger_engine(
+        pool,
+        http_client,
+        token.clone(),
+        rx,
+        gh_client_id,
+        gh_app_key_path,
+    );
 
     let app = Router::new()
         .route("/health", get(|| async { "Relay Server is alive" }))
@@ -79,4 +87,14 @@ pub fn build_http_client() -> Result<Client, ClientCreationError> {
     let client = Client::builder().user_agent(USER_AGENT).build()?;
 
     Ok(client)
+}
+
+/// Reads the required environment variables.
+pub fn read_environment_variables() -> Result<(String, String), FatalError> {
+    let client_id = std::env::var("GH_CLIENT_ID")
+        .map_err(|_| FatalError::EnvVarNotSet("GH_CLIENT_ID".to_string()))?;
+    let pem_path = std::env::var("GH_APP_KEY_PATH")
+        .map_err(|_| FatalError::EnvVarNotSet("GH_APP_KEY_PATH".to_string()))?;
+
+    Ok((client_id, pem_path))
 }
