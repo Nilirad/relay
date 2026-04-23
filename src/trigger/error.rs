@@ -13,18 +13,15 @@ pub enum WorkflowTriggerError {
     #[error("Database error: {0}")]
     Database(#[from] sqlx::Error),
 
-    /// Missing response from API service.
-    #[error("HTTP request failed: {0}")]
-    Request(#[from] reqwest::Error),
+    /// API service error.
+    #[error(transparent)]
+    Api(#[from] RequestError),
+}
 
-    /// Bad response from API service.
-    #[error("Unexpected HTTP response ({status}): {text}")]
-    Response {
-        /// The HTTP status code of the response.
-        status: reqwest::StatusCode,
-        /// The full text of the HTTP response.
-        text: String,
-    },
+impl From<reqwest::Error> for WorkflowTriggerError {
+    fn from(e: reqwest::Error) -> Self {
+        Self::Api(RequestError::Request(e))
+    }
 }
 
 /// Authentication errors.
@@ -42,11 +39,25 @@ pub enum AuthError {
     #[error("JWT generation failed: {0}")]
     Jwt(#[from] jsonwebtoken::errors::Error),
 
-    /// Missing response from authentication server.
+    /// Authentication server error.
+    #[error(transparent)]
+    Server(#[from] RequestError),
+}
+
+impl From<reqwest::Error> for AuthError {
+    fn from(e: reqwest::Error) -> Self {
+        Self::Server(RequestError::Request(e))
+    }
+}
+
+/// An error while performing an HTTP request.
+#[derive(Debug, Error)]
+pub enum RequestError {
+    /// Missing response from API service.
     #[error("HTTP request failed: {0}")]
     Request(#[from] reqwest::Error),
 
-    /// Bad response from authentication server.
+    /// Bad response from API service.
     #[error("Unexpected HTTP response ({status}): {text}")]
     Response {
         /// The HTTP status code of the response.

@@ -5,7 +5,10 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
-use crate::{model::Subscriber, trigger::error::AuthError};
+use crate::{
+    model::Subscriber,
+    trigger::error::{AuthError, RequestError},
+};
 
 /// Payload that GitHub expects in the JWT.
 ///
@@ -87,9 +90,9 @@ pub(super) async fn request_iat(
         info!("IAT received for subscriber {}", sub.target_repo);
         Ok(response_json.token)
     } else {
-        Err(AuthError::Response {
+        Err(AuthError::Server(RequestError::Response {
             status: response.status(),
             text: response.text().await?,
-        })
+        }))
     }
 }

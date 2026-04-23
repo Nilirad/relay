@@ -13,7 +13,7 @@ use crate::{
     model::Subscriber,
     trigger::{
         auth::{generate_gh_jwt, request_iat},
-        error::WorkflowTriggerError,
+        error::{RequestError, WorkflowTriggerError},
     },
 };
 
@@ -155,9 +155,9 @@ async fn send_repository_dispatch(
         );
         Ok(())
     } else {
-        Err(WorkflowTriggerError::Response {
+        Err(WorkflowTriggerError::Api(RequestError::Response {
             status: response.status(),
             text: response.text().await?,
-        })
+        }))
     }
 }
