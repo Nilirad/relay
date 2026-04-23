@@ -1,6 +1,6 @@
 //! Axum route handlers.
 
-use crate::error::AppError;
+use crate::error::HandlerError;
 use crate::model::{Branch, CreateBranch, CreateSubscriber, Subscriber};
 use crate::state::AppState;
 use axum::{Json, extract::State};
@@ -10,7 +10,7 @@ use tracing::info;
 pub async fn create_branch(
     State(state): State<AppState>,
     Json(payload): Json<CreateBranch>,
-) -> Result<Json<Branch>, AppError> {
+) -> Result<Json<Branch>, HandlerError> {
     let branch = sqlx::query_as::<_, Branch>(
         "INSERT INTO branches (repo_url, name) VALUES (?, ?) RETURNING *",
     )
@@ -28,7 +28,7 @@ pub async fn create_branch(
 pub async fn create_subscriber(
     State(state): State<AppState>,
     Json(payload): Json<CreateSubscriber>,
-) -> Result<Json<Subscriber>, AppError> {
+) -> Result<Json<Subscriber>, HandlerError> {
     let mut transaction = state.db_pool.begin().await?;
     let branch_id = get_or_insert_branch_id(&mut transaction, &payload).await?;
     let subscriber = sqlx::query_as::<_, Subscriber>(
@@ -53,7 +53,7 @@ pub async fn create_subscriber(
 async fn get_or_insert_branch_id(
     transaction: &mut sqlx::SqliteConnection,
     payload: &CreateSubscriber,
-) -> Result<i64, AppError> {
+) -> Result<i64, HandlerError> {
     let branch_id_opt =
         sqlx::query_scalar::<_, i64>("SELECT id FROM branches WHERE repo_url = ? AND name = ?")
             .bind(&payload.source_repo_url)

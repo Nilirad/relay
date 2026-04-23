@@ -9,13 +9,16 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
 use crate::{
-    error::AppError,
     events::BranchUpdateEvent,
     model::Subscriber,
-    trigger::auth::{generate_gh_jwt, request_iat},
+    trigger::{
+        auth::{generate_gh_jwt, request_iat},
+        error::{RequestError, WorkflowTriggerError},
+    },
 };
 
 mod auth;
+mod error;
 
 /// Spawns an asynchronous task to trigger repository workflows.
 ///
@@ -23,10 +26,10 @@ mod auth;
 /// triggering a workflow for each event it receives.
 pub fn start_trigger_engine(
     pool: SqlitePool,
+    http_client: Client,
     token: CancellationToken,
     rx: Receiver<BranchUpdateEvent>,
 ) {
-    let http_client = build_http_client();
     tokio::spawn(async move {
         info!("Trigger engine started");
         trigger_loop(pool, http_client, token, rx).await;
@@ -63,7 +66,7 @@ async fn dispatch_events(
     pool: &SqlitePool,
     http_client: &Client,
     event: BranchUpdateEvent,
-) -> Result<(), AppError> {
+) -> Result<(), WorkflowTriggerError> {
     info!(
         "Received update event for branch {}: {}",
         event.branch_id, event.new_hash
@@ -91,7 +94,7 @@ async fn dispatch_events(
 async fn get_subscribers(
     pool: &SqlitePool,
     event: &BranchUpdateEvent,
-) -> Result<Vec<Subscriber>, AppError> {
+) -> Result<Vec<Subscriber>, WorkflowTriggerError> {
     let subscribers =
         sqlx::query_as::<_, Subscriber>("SELECT * FROM subscribers WHERE branch_id = ?")
             .bind(event.branch_id)
@@ -108,7 +111,7 @@ async fn notify_subscriber(
     jwt: &str,
     event: &BranchUpdateEvent,
     sub: Subscriber,
-) -> Result<(), AppError> {
+) -> Result<(), WorkflowTriggerError> {
     let iat = request_iat(http_client, jwt, &sub).await?;
     send_repository_dispatch(http_client, &iat, event, &sub).await?;
     Ok(())
@@ -120,7 +123,7 @@ async fn send_repository_dispatch(
     iat: &str,
     event: &BranchUpdateEvent,
     sub: &Subscriber,
-) -> Result<(), AppError> {
+) -> Result<(), WorkflowTriggerError> {
     let api_url = format!(
         "https://api.github.com/repos/{}/dispatches",
         sub.target_repo
@@ -152,20 +155,9 @@ async fn send_repository_dispatch(
         );
         Ok(())
     } else {
-        Err(AppError::Response(format!(
-            "Unexpected status {}: {}",
-            response.status(),
-            response.text().await?
-        )))
+        Err(WorkflowTriggerError::Api(RequestError::Response {
+            status: response.status(),
+            text: response.text().await?,
+        }))
     }
-}
-
-/// Creates a new HTTP client.
-fn build_http_client() -> Client {
-    const USER_AGENT: &str = "nilirad-relay-server";
-
-    Client::builder()
-        .user_agent(USER_AGENT)
-        .build()
-        .expect("Failed to build HTTP client")
 }

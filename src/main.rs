@@ -5,11 +5,12 @@ use axum::{
     Router,
     routing::{get, post},
 };
+use reqwest::Client;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 
 use crate::{
-    error::AppError,
+    error::{ClientCreationError, FatalError},
     events::BranchUpdateEvent,
     handler::{create_branch, create_subscriber},
     state::AppState,
@@ -29,7 +30,7 @@ async fn main() {
 }
 
 /// Runs the server, delegating errors to the caller.
-async fn run_app() -> Result<(), AppError> {
+async fn run_app() -> Result<(), FatalError> {
     const BRANCH_UPDATE_EVENT_BUFFER_SIZE: usize = 64;
 
     tracing_subscriber::fmt::init();
@@ -39,21 +40,36 @@ async fn run_app() -> Result<(), AppError> {
         db_pool: pool.clone(),
     };
 
+    let http_client = build_http_client()?;
+
     let token = CancellationToken::new();
     let (tx, rx) = tokio::sync::mpsc::channel::<BranchUpdateEvent>(BRANCH_UPDATE_EVENT_BUFFER_SIZE);
     polling::start_polling_engine(pool.clone(), token.clone(), tx);
-    trigger::start_trigger_engine(pool, token.clone(), rx);
+    trigger::start_trigger_engine(pool, http_client, token.clone(), rx);
 
     let app = Router::new()
         .route("/health", get(|| async { "Relay Server is alive" }))
         .route("/branches", post(create_branch))
         .route("/subscribers", post(create_subscriber))
         .with_state(state);
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
+        .await
+        .map_err(FatalError::TcpBinding)?;
     println!("Server listening on http://0.0.0.0:3000");
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .await
+        .map_err(FatalError::Serve)?;
 
     token.cancel();
 
     Ok(())
+}
+
+/// Creates a new HTTP client.
+pub fn build_http_client() -> Result<Client, ClientCreationError> {
+    const USER_AGENT: &str = "nilirad-relay-server";
+
+    let client = Client::builder().user_agent(USER_AGENT).build()?;
+
+    Ok(client)
 }
