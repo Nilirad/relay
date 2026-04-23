@@ -1,4 +1,4 @@
-//! Error type definitions and implementations.
+//! Definitions for common error types.
 
 use axum::{
     http::StatusCode,
@@ -6,15 +6,15 @@ use axum::{
 };
 use thiserror::Error;
 
-/// Consolidates every application error into a single type.
+/// An error happened inside an Axum handler.
 #[derive(Debug, Error)]
-pub enum AppError {
-    /// Error occurred while executing database query or connection.
+pub enum HandlerError {
+    /// Database query execution failure.
     #[error("SQLx Error: {0}")]
-    Sqlx(#[from] sqlx::Error),
+    DbQuery(#[from] sqlx::Error),
 }
 
-impl IntoResponse for AppError {
+impl IntoResponse for HandlerError {
     fn into_response(self) -> Response {
         (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()).into_response()
     }
