@@ -32,6 +32,8 @@ mod handler;
 mod model;
 mod polling;
 mod state;
+#[cfg(test)]
+mod test_utils;
 mod trigger;
 
 #[tokio::main]
