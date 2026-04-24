@@ -93,9 +93,8 @@ mod tests {
     #[tokio::test]
     async fn test_create_subscriber() {
         let pool = create_test_db().await;
-        let state = AppState { 
+        let state = AppState {
             db_pool: pool.clone(),
-            github_api_base_url: "https://api.github.com".to_string(),
         };
         let payload = CreateSubscriber {
             source_repo_url: "https://github.com/org/repo".to_string(),

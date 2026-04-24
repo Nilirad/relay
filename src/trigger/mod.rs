@@ -45,7 +45,7 @@ async fn trigger_loop(
 ) {
     loop {
         tokio::select! {
-            Some(event) = rx.recv() => handle_branch_update(&ctx.db_pool, &http_client, event, &creds).await,
+            Some(event) = rx.recv() => handle_branch_update(&ctx, &http_client, event, &creds).await,
             _ = ctx.token.cancelled() => break,
         }
     }
@@ -54,12 +54,19 @@ async fn trigger_loop(
 
 /// Handles a [`BranchUpdateEvent`], handling any possible error.
 async fn handle_branch_update(
-    pool: &SqlitePool,
+    ctx: &SharedContext,
     http_client: &Client,
     event: BranchUpdateEvent,
     creds: &AuthCredentials,
 ) {
-    let result = dispatch_events(pool, http_client, event, creds).await;
+    let result = dispatch_events(
+        &ctx.db_pool,
+        &ctx.github_api_base_url,
+        http_client,
+        event,
+        creds,
+    )
+    .await;
 
     if let Err(e) = result {
         error!("{e}");
@@ -69,6 +76,7 @@ async fn handle_branch_update(
 /// Sends a `repository_dispatch` event for each relevant [`Subscriber`].
 async fn dispatch_events(
     pool: &SqlitePool,
+    api_base_url: &str,
     http_client: &Client,
     event: BranchUpdateEvent,
     creds: &AuthCredentials,
@@ -83,7 +91,7 @@ async fn dispatch_events(
     let jwt = generate_gh_jwt(creds)?;
 
     for sub in subscribers {
-        let result = notify_subscriber(http_client, &jwt, &event, sub).await;
+        let result = notify_subscriber(http_client, api_base_url, &jwt, &event, sub).await;
         if let Err(e) = result {
             error!("{e:?}");
         }
@@ -110,26 +118,25 @@ async fn get_subscribers(
 /// and sends a `repository_dispatch` event to the specified [`Subscriber`].
 async fn notify_subscriber(
     http_client: &Client,
+    api_base_url: &str,
     jwt: &str,
     event: &BranchUpdateEvent,
     sub: Subscriber,
 ) -> Result<(), WorkflowTriggerError> {
-    let iat = request_iat(http_client, jwt, &sub).await?;
-    send_repository_dispatch(http_client, &iat, event, &sub).await?;
+    let iat = request_iat(http_client, api_base_url, jwt, &sub).await?;
+    send_repository_dispatch(http_client, api_base_url, &iat, event, &sub).await?;
     Ok(())
 }
 
 /// Sends a `repository_dispatch` event to the specified [`Subscriber`].
 async fn send_repository_dispatch(
     http_client: &Client,
+    api_base_url: &str,
     iat: &str,
     event: &BranchUpdateEvent,
     sub: &Subscriber,
 ) -> Result<(), WorkflowTriggerError> {
-    let api_url = format!(
-        "https://api.github.com/repos/{}/dispatches",
-        sub.target_repo
-    );
+    let api_url = format!("{}/repos/{}/dispatches", api_base_url, sub.target_repo);
 
     let payload = serde_json::json!({
         "event_type": sub.event_type,
@@ -161,5 +168,66 @@ async fn send_repository_dispatch(
             status: response.status(),
             text: response.text().await?,
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::events::BranchUpdateEvent;
+    use crate::trigger::auth::AuthCredentials;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn test_dispatch_events() {
+        let pool = crate::test_utils::create_test_db().await;
+        let mock_server = MockServer::start().await;
+        let http_client = reqwest::Client::new();
+
+        // Setup mock subscriber in DB
+        sqlx::query!(
+            "INSERT INTO branches (repo_url, name) VALUES (?, ?)",
+            "repo",
+            "main"
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query!("INSERT INTO subscribers (branch_id, target_repo, event_type, gh_app_installation_id) VALUES (?, ?, ?, ?)", 
+                     1, "org/target", "dispatch", 1)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Mock IAT token request
+        Mock::given(method("POST"))
+            .and(path("/app/installations/1/access_tokens"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"token": "mock-iat-token"})),
+            )
+            .mount(&mock_server)
+            .await;
+
+        // Mock repository dispatch
+        Mock::given(method("POST"))
+            .and(path("/repos/org/target/dispatches"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&mock_server)
+            .await;
+
+        let event = BranchUpdateEvent {
+            branch_id: 1,
+            new_hash: "new-hash".to_string(),
+        };
+
+        let creds = AuthCredentials {
+            client_id: "mock-client-id".to_string(),
+            pem_path: "nilirad-relay-dev.pem".to_string(),
+        };
+
+        let res = dispatch_events(&pool, &mock_server.uri(), &http_client, event, &creds).await;
+        assert!(res.is_ok());
     }
 }
