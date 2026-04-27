@@ -22,7 +22,7 @@ use crate::{
     events::BranchUpdateEvent,
     handler::{create_branch, create_subscriber},
     state::AppState,
-    trigger::get_auth_credentials,
+    trigger::{TriggerEngine, get_auth_credentials},
 };
 
 mod context;
@@ -64,7 +64,15 @@ async fn run_app() -> Result<(), FatalError> {
     };
     let (tx, rx) = tokio::sync::mpsc::channel::<BranchUpdateEvent>(BRANCH_UPDATE_EVENT_BUFFER_SIZE);
     polling::start_polling_engine(ctx.clone(), tx);
-    trigger::start_trigger_engine(ctx, http_client, rx, creds);
+
+    let trigger_engine = TriggerEngine {
+        ctx,
+        http_client,
+        rx,
+        creds,
+    };
+
+    trigger_engine.start();
 
     let app = Router::new()
         .route("/health", get(|| async { "Relay Server is alive" }))

@@ -89,25 +89,10 @@ async fn send_branch_update_events(
 
 #[cfg(test)]
 mod tests {
+    use crate::test_utils::MockGitFetcher;
+
     use super::*;
-    use crate::polling::git::GitFetcher;
-    use async_trait::async_trait;
     use std::sync::Arc;
-
-    struct MockGitFetcher {
-        hash: String,
-    }
-
-    #[async_trait]
-    impl GitFetcher for MockGitFetcher {
-        async fn get_latest_hash(
-            &self,
-            _repo: &str,
-            _branch: &str,
-        ) -> Result<String, crate::error::CommitHashError> {
-            Ok(self.hash.clone())
-        }
-    }
 
     #[tokio::test]
     async fn test_poll_branches_updates_db() {
