@@ -194,7 +194,7 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        sqlx::query!("INSERT INTO subscribers (branch_id, target_repo, event_type, gh_app_installation_id) VALUES (?, ?, ?, ?)", 
+        sqlx::query!("INSERT INTO subscribers (branch_id, target_repo, event_type, gh_app_installation_id) VALUES (?, ?, ?, ?)",
                      1, "org/target", "dispatch", 1)
             .execute(&pool)
             .await

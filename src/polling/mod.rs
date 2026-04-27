@@ -2,7 +2,6 @@
 
 use std::time::Duration;
 
-use sqlx::SqlitePool;
 use tokio::sync::mpsc::{Sender, error::SendError};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -20,7 +19,7 @@ use crate::{
 mod branch;
 mod db;
 mod error;
-mod git;
+pub mod git;
 
 /// Spawns an asynchronous task to periodically poll git branches for updates.
 pub fn start_polling_engine(ctx: SharedContext, tx: Sender<BranchUpdateEvent>) {
@@ -34,7 +33,7 @@ pub fn start_polling_engine(ctx: SharedContext, tx: Sender<BranchUpdateEvent>) {
 async fn polling_loop(ctx: SharedContext, tx: Sender<BranchUpdateEvent>) {
     loop {
         tokio::select! {
-            res = poll_branches(&ctx.db_pool, &tx) => {followup_poll(res, &ctx.token).await}
+            res = poll_branches(&ctx, &tx) => {followup_poll(res, &ctx.token).await}
             _ = ctx.token.cancelled() => break,
         }
     }
@@ -43,11 +42,11 @@ async fn polling_loop(ctx: SharedContext, tx: Sender<BranchUpdateEvent>) {
 
 /// Orchestrates polling operations.
 async fn poll_branches(
-    pool: &SqlitePool,
+    ctx: &SharedContext,
     tx: &Sender<BranchUpdateEvent>,
 ) -> Result<(), PollingError> {
-    let updated_branches = gather_updated_branches(pool).await?;
-    update_branches_table(pool, &updated_branches).await?;
+    let updated_branches = gather_updated_branches(&ctx.db_pool, ctx.git_fetcher.as_ref()).await?;
+    update_branches_table(&ctx.db_pool, &updated_branches).await?;
     send_branch_update_events(&updated_branches, tx).await?;
 
     Ok(())
@@ -86,4 +85,70 @@ async fn send_branch_update_events(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::polling::git::GitFetcher;
+    use async_trait::async_trait;
+    use std::sync::Arc;
+
+    struct MockGitFetcher {
+        hash: String,
+    }
+
+    #[async_trait]
+    impl GitFetcher for MockGitFetcher {
+        async fn get_latest_hash(
+            &self,
+            _repo: &str,
+            _branch: &str,
+        ) -> Result<String, crate::error::CommitHashError> {
+            Ok(self.hash.clone())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_poll_branches_updates_db() {
+        let pool = crate::test_utils::create_test_db().await;
+
+        // Insert a branch
+        sqlx::query!(
+            "INSERT INTO branches (repo_url, name, last_commit_hash) VALUES (?, ?, ?)",
+            "repo",
+            "main",
+            "old-hash"
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let mock_fetcher = Arc::new(MockGitFetcher {
+            hash: "new-hash".to_string(),
+        });
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+
+        let updated_branches = gather_updated_branches(&pool, mock_fetcher.as_ref())
+            .await
+            .unwrap();
+        update_branches_table(&pool, &updated_branches)
+            .await
+            .unwrap();
+        send_branch_update_events(&updated_branches, &tx)
+            .await
+            .unwrap();
+
+        // Verify DB update
+        let branch = sqlx::query!("SELECT last_commit_hash FROM branches WHERE id = 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(branch.last_commit_hash.unwrap(), "new-hash");
+
+        // Verify event sent
+        let event = rx.recv().await.unwrap();
+        assert_eq!(event.new_hash, "new-hash");
+    }
 }

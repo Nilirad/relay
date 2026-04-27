@@ -60,6 +60,7 @@ async fn run_app() -> Result<(), FatalError> {
         db_pool: pool.clone(),
         token: token.clone(),
         github_api_base_url: "https://api.github.com".to_string(),
+        git_fetcher: std::sync::Arc::new(crate::polling::git::MainGitFetcher),
     };
     let (tx, rx) = tokio::sync::mpsc::channel::<BranchUpdateEvent>(BRANCH_UPDATE_EVENT_BUFFER_SIZE);
     polling::start_polling_engine(ctx.clone(), tx);

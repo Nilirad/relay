@@ -4,17 +4,22 @@ use futures::{StreamExt, stream};
 use sqlx::SqlitePool;
 use tracing::warn;
 
-use crate::{error::CommitHashError, model::Branch, polling::branch::BranchInfo};
+use crate::{
+    error::CommitHashError,
+    model::Branch,
+    polling::{branch::BranchInfo, git::GitFetcher},
+};
 
 /// Gathers stored branches that need to be updated.
 pub(super) async fn gather_updated_branches(
     pool: &SqlitePool,
+    fetcher: &dyn GitFetcher,
 ) -> Result<Vec<BranchInfo>, sqlx::Error> {
     // TODO: Make buffer size configurable.
     const BUFFER_SIZE: usize = 3;
 
     let branch_results = stream::iter(collect_branches(pool).await?)
-        .map(BranchInfo::new)
+        .map(|b| BranchInfo::new(b, fetcher))
         .buffer_unordered(BUFFER_SIZE)
         .collect::<Vec<Result<BranchInfo, CommitHashError>>>()
         .await;

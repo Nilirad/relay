@@ -1,21 +1,36 @@
 //! Operations to fetch and extract git branch data from remote repositories.
 
 use crate::error::CommitHashError;
+use async_trait::async_trait;
 
-/// Returns the latest commit of a branch in a remote git repository.
-///
-/// Runs the command `git ls-remote`.
-pub(super) async fn get_latest_hash(
-    repo_url: String,
-    branch: String,
-) -> Result<String, CommitHashError> {
-    tokio::process::Command::new("git")
-        .args(["ls-remote", &repo_url, &branch])
-        .output()
-        .await
-        .map_err(CommitHashError::from)
-        .and_then(handle_git_output_result)
-        .and_then(|stdout| extract_hash(stdout, repo_url, branch))
+/// Allows running git commands.
+#[async_trait]
+pub trait GitFetcher: Send + Sync {
+    async fn get_latest_hash(
+        &self,
+        repo_url: &str,
+        branch: &str,
+    ) -> Result<String, CommitHashError>;
+}
+
+/// Runs git commands.
+pub struct MainGitFetcher;
+
+#[async_trait]
+impl GitFetcher for MainGitFetcher {
+    async fn get_latest_hash(
+        &self,
+        repo_url: &str,
+        branch: &str,
+    ) -> Result<String, CommitHashError> {
+        tokio::process::Command::new("git")
+            .args(["ls-remote", repo_url, branch])
+            .output()
+            .await
+            .map_err(CommitHashError::from)
+            .and_then(handle_git_output_result)
+            .and_then(|stdout| extract_hash(stdout, repo_url.to_string(), branch.to_string()))
+    }
 }
 
 /// Analyzes the `git` exit status to handle process output.
