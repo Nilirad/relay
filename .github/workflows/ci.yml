@@ -56,7 +56,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Tests
-        run: cargo nextest run --locked --all-features --no-tests=pass
+        run: cargo nextest run --locked --all-features
 
       - name: Build
         run: cargo build --locked --release

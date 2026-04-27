@@ -1,21 +1,36 @@
 //! Operations to fetch and extract git branch data from remote repositories.
 
 use crate::error::CommitHashError;
+use async_trait::async_trait;
 
-/// Returns the latest commit of a branch in a remote git repository.
-///
-/// Runs the command `git ls-remote`.
-pub(super) async fn get_latest_hash(
-    repo_url: String,
-    branch: String,
-) -> Result<String, CommitHashError> {
-    tokio::process::Command::new("git")
-        .args(["ls-remote", &repo_url, &branch])
-        .output()
-        .await
-        .map_err(CommitHashError::from)
-        .and_then(handle_git_output_result)
-        .and_then(|stdout| extract_hash(stdout, repo_url, branch))
+/// Allows running git commands.
+#[async_trait]
+pub trait GitFetcher: Send + Sync {
+    async fn get_latest_hash(
+        &self,
+        repo_url: &str,
+        branch: &str,
+    ) -> Result<String, CommitHashError>;
+}
+
+/// Runs git commands.
+pub struct MainGitFetcher;
+
+#[async_trait]
+impl GitFetcher for MainGitFetcher {
+    async fn get_latest_hash(
+        &self,
+        repo_url: &str,
+        branch: &str,
+    ) -> Result<String, CommitHashError> {
+        tokio::process::Command::new("git")
+            .args(["ls-remote", repo_url, branch])
+            .output()
+            .await
+            .map_err(CommitHashError::from)
+            .and_then(handle_git_output_result)
+            .and_then(|stdout| extract_hash(stdout, repo_url.to_string(), branch.to_string()))
+    }
 }
 
 /// Analyzes the `git` exit status to handle process output.
@@ -43,4 +58,72 @@ fn extract_hash(
             repo_url,
             branch,
         })
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(
+        clippy::panic,
+        clippy::expect_used,
+        clippy::todo,
+        clippy::unimplemented,
+        clippy::indexing_slicing
+    )]
+
+    use super::*;
+
+    #[test]
+    fn test_extract_hash_success() {
+        let stdout = b"678c4343237127dbadbf1806dd98b2154ffd2ebe\trefs/heads/main\n".to_vec();
+        let repo_url = "https://github.com/Nilirad/relay".to_string();
+        let branch = "main".to_string();
+
+        let result = extract_hash(stdout, repo_url, branch);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "678c4343237127dbadbf1806dd98b2154ffd2ebe");
+    }
+
+    #[test]
+    fn test_extract_hash_empty_output() {
+        let stdout = b"".to_vec();
+        let repo_url = "https://github.com/Nilirad/relay".to_string();
+        let branch = "main".to_string();
+
+        let result = extract_hash(stdout.clone(), repo_url.clone(), branch.clone());
+
+        let Err(CommitHashError::UnexpectedOutput {
+            stdout: err_stdout,
+            repo_url: err_repo_url,
+            branch: err_branch,
+        }) = result
+        else {
+            panic!("Expected UnexpectedOutput error");
+        };
+
+        assert_eq!(err_stdout, String::from_utf8(stdout).unwrap_or_default());
+        assert_eq!(err_repo_url, repo_url);
+        assert_eq!(err_branch, branch);
+    }
+
+    #[test]
+    fn test_extract_hash_whitespace_only() {
+        let stdout = b"   \n\t ".to_vec();
+        let repo_url = "https://github.com/Nilirad/relay".to_string();
+        let branch = "main".to_string();
+
+        let result = extract_hash(stdout.clone(), repo_url.clone(), branch.clone());
+
+        let Err(CommitHashError::UnexpectedOutput {
+            stdout: err_stdout,
+            repo_url: err_repo_url,
+            branch: err_branch,
+        }) = result
+        else {
+            panic!("Expected UnexpectedOutput error");
+        };
+
+        assert_eq!(err_stdout, String::from_utf8(stdout).unwrap_or_default());
+        assert_eq!(err_repo_url, repo_url);
+        assert_eq!(err_branch, branch);
+    }
 }

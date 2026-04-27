@@ -72,3 +72,46 @@ async fn get_or_insert_branch_id(
         .await
         .map_err(Into::into)
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(
+        clippy::panic,
+        clippy::expect_used,
+        clippy::todo,
+        clippy::unimplemented,
+        clippy::indexing_slicing
+    )]
+
+    use super::*;
+    use crate::model::CreateSubscriber;
+    use crate::state::AppState;
+    use crate::test_utils::create_test_db;
+    use axum::Json;
+    use axum::extract::State;
+
+    #[tokio::test]
+    async fn test_create_subscriber() {
+        let pool = create_test_db().await;
+        let state = AppState {
+            db_pool: pool.clone(),
+        };
+        let payload = CreateSubscriber {
+            source_repo_url: "https://github.com/org/repo".to_string(),
+            source_branch_name: "main".to_string(),
+            target_repo: "https://github.com/org/target".to_string(),
+            event_type: "dispatch".to_string(),
+            gh_app_installation_id: 1,
+        };
+
+        let res = create_subscriber(State(state), Json(payload)).await;
+        assert!(res.is_ok());
+
+        // Verify in DB
+        let subscriber = sqlx::query!("SELECT target_repo FROM subscribers")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(subscriber.target_repo, "https://github.com/org/target");
+    }
+}
