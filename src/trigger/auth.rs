@@ -1,5 +1,6 @@
 //! Authentication and authorization to request services.
 
+use async_trait::async_trait;
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -10,6 +11,32 @@ use crate::{
     model::Subscriber,
     trigger::error::{AuthError, RequestError},
 };
+
+/// Provides authentication functionality.
+#[async_trait]
+pub trait Authenticator {
+    /// Requests a GitHub Installation Access Token.
+    async fn request_installation_token(&self, sub: &Subscriber) -> Result<String, AuthError>;
+}
+
+/// An [`Authenticator`] for GitHub.
+pub struct GitHubAuthenticator {
+    /// The credentials to authenticate to the server.
+    pub credentials: AuthCredentials,
+    /// The HTTP client to make requests to the authentication server.
+    pub http_client: reqwest::Client,
+}
+
+#[async_trait]
+impl Authenticator for GitHubAuthenticator {
+    async fn request_installation_token(
+        &self,
+        subscriber: &Subscriber,
+    ) -> Result<String, AuthError> {
+        let jwt = generate_gh_jwt(&self.credentials)?;
+        request_iat(&self.http_client, &jwt, subscriber).await
+    }
+}
 
 /// Credentials required for authentication.
 #[derive(Debug, Clone)]
@@ -88,7 +115,6 @@ pub(super) fn generate_gh_jwt(creds: &AuthCredentials) -> Result<String, AuthErr
 /// [iat_docs]: https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-an-installation-access-token-for-a-github-app
 pub(super) async fn request_iat(
     http_client: &Client,
-    api_base_url: &str,
     jwt: &str,
     sub: &Subscriber,
 ) -> Result<String, AuthError> {
@@ -98,8 +124,8 @@ pub(super) async fn request_iat(
     }
 
     let api_url = format!(
-        "{}/app/installations/{}/access_tokens",
-        api_base_url, sub.gh_app_installation_id
+        "https://api.github.com/app/installations/{}/access_tokens",
+        sub.gh_app_installation_id
     );
     let response = http_client
         .post(&api_url)

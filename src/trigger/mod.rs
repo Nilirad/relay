@@ -9,16 +9,13 @@ use crate::{
     context::SharedContext,
     events::BranchUpdateEvent,
     model::Subscriber,
-    trigger::{
-        auth::{generate_gh_jwt, request_iat},
-        error::{RequestError, WorkflowTriggerError},
-    },
+    trigger::error::{RequestError, WorkflowTriggerError},
 };
 
 pub use auth::*;
 
 mod auth;
-mod error;
+pub mod error;
 
 /// Runs an asynchronous task
 /// that triggers a workflow in a remote repository.
@@ -32,8 +29,8 @@ pub struct TriggerEngine {
     /// Receives [`BranchUpdateEvent`]s.
     pub rx: Receiver<BranchUpdateEvent>,
 
-    /// Contains authentication credentials.
-    pub creds: AuthCredentials,
+    /// Authenticates requests to the GitHub API.
+    pub authenticator: Box<dyn Authenticator + Send + Sync>,
 }
 
 impl TriggerEngine {
@@ -81,16 +78,11 @@ async fn dispatch_events(
 
     let subscribers = get_subscribers(&engine.ctx.db_pool, &event).await?;
 
-    let jwt = generate_gh_jwt(&engine.creds)?;
-
     for sub in subscribers {
-        let iat = request_iat(
-            &engine.http_client,
-            &engine.ctx.github_api_base_url,
-            &jwt,
-            &sub,
-        )
-        .await?;
+        let iat = engine
+            .authenticator
+            .request_installation_token(&sub)
+            .await?;
         let result = notify_subscriber(engine, iat, &event, sub).await;
         if let Err(e) = result {
             error!("{e:?}");
@@ -178,8 +170,8 @@ mod tests {
 
     use super::*;
     use crate::events::BranchUpdateEvent;
-    use crate::test_utils::MockGitFetcher;
-    use crate::trigger::auth::AuthCredentials;
+    use crate::test_utils::{MockAuthenticator, MockGitFetcher};
+
     use tokio_util::sync::CancellationToken;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -227,11 +219,6 @@ mod tests {
             new_hash: "new-hash".to_string(),
         };
 
-        let creds = AuthCredentials {
-            client_id: "mock-client-id".to_string(),
-            pem_path: "nilirad-relay-dev.pem".to_string(),
-        };
-
         let trigger_engine = TriggerEngine {
             ctx: SharedContext {
                 db_pool: pool,
@@ -243,7 +230,9 @@ mod tests {
             },
             http_client,
             rx: tokio::sync::mpsc::channel::<BranchUpdateEvent>(1).1,
-            creds,
+            authenticator: Box::new(MockAuthenticator {
+                iat: "Test IAT".to_string(),
+            }),
         };
 
         let res = dispatch_events(&trigger_engine, event).await;

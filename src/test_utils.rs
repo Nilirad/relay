@@ -6,7 +6,10 @@
     clippy::indexing_slicing
 )]
 
-use crate::polling::git::GitFetcher;
+use crate::{
+    polling::git::GitFetcher,
+    trigger::{Authenticator, error::AuthError},
+};
 use async_trait::async_trait;
 use sqlx::{SqlitePool, sqlite::SqlitePoolOptions};
 
@@ -22,6 +25,20 @@ impl GitFetcher for MockGitFetcher {
         _branch: &str,
     ) -> Result<String, crate::error::CommitHashError> {
         Ok(self.hash.clone())
+    }
+}
+
+pub struct MockAuthenticator {
+    pub iat: String,
+}
+
+#[async_trait]
+impl Authenticator for MockAuthenticator {
+    async fn request_installation_token(
+        &self,
+        _sub: &crate::model::Subscriber,
+    ) -> Result<String, AuthError> {
+        Ok(self.iat.clone())
     }
 }
 
