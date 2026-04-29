@@ -22,7 +22,7 @@ use crate::{
     events::BranchUpdateEvent,
     handler::{create_branch, create_subscriber},
     state::AppState,
-    trigger::get_auth_credentials,
+    trigger::{GitHubAuthenticator, TriggerEngine, get_auth_credentials},
 };
 
 mod context;
@@ -32,6 +32,8 @@ mod handler;
 mod model;
 mod polling;
 mod state;
+#[cfg(test)]
+mod test_utils;
 mod trigger;
 
 #[tokio::main]
@@ -51,16 +53,29 @@ async fn run_app() -> Result<(), FatalError> {
     };
 
     let http_client = build_http_client()?;
-    let creds = get_auth_credentials()?;
 
     let token = CancellationToken::new();
     let ctx = SharedContext {
         db_pool: pool.clone(),
         token: token.clone(),
+        github_api_base_url: "https://api.github.com".to_string(),
+        git_fetcher: std::sync::Arc::new(crate::polling::git::MainGitFetcher),
     };
     let (tx, rx) = tokio::sync::mpsc::channel::<BranchUpdateEvent>(BRANCH_UPDATE_EVENT_BUFFER_SIZE);
     polling::start_polling_engine(ctx.clone(), tx);
-    trigger::start_trigger_engine(ctx, http_client, rx, creds);
+
+    let authenticator = Box::new(GitHubAuthenticator {
+        credentials: get_auth_credentials()?,
+        http_client: http_client.clone(),
+    });
+    let trigger_engine = TriggerEngine {
+        ctx,
+        http_client,
+        rx,
+        authenticator,
+    };
+
+    trigger_engine.start();
 
     let app = Router::new()
         .route("/health", get(|| async { "Relay Server is alive" }))

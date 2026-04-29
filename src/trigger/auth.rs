@@ -1,5 +1,6 @@
 //! Authentication and authorization to request services.
 
+use async_trait::async_trait;
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -10,6 +11,32 @@ use crate::{
     model::Subscriber,
     trigger::error::{AuthError, RequestError},
 };
+
+/// Provides authentication functionality.
+#[async_trait]
+pub trait Authenticator {
+    /// Requests a GitHub Installation Access Token.
+    async fn request_installation_token(&self, sub: &Subscriber) -> Result<String, AuthError>;
+}
+
+/// An [`Authenticator`] for GitHub.
+pub struct GitHubAuthenticator {
+    /// The credentials to authenticate to the server.
+    pub credentials: AuthCredentials,
+    /// The HTTP client to make requests to the authentication server.
+    pub http_client: reqwest::Client,
+}
+
+#[async_trait]
+impl Authenticator for GitHubAuthenticator {
+    async fn request_installation_token(
+        &self,
+        subscriber: &Subscriber,
+    ) -> Result<String, AuthError> {
+        let jwt = generate_gh_jwt(&self.credentials)?;
+        request_iat(&self.http_client, &jwt, subscriber).await
+    }
+}
 
 /// Credentials required for authentication.
 #[derive(Debug, Clone)]

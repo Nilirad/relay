@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT last_commit_hash FROM branches WHERE id = 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "last_commit_hash",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "3a286aef5d392d9189cacfe4820ff5aefdc41efd8c5bc6736846ae67334feb08"
+}
