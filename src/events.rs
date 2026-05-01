@@ -1,7 +1,7 @@
 //! Items allowing communication between modules.
 
 /// Signals that a git branch has updated.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BranchUpdateEvent {
     /// The database ID column of the updated branch.
     pub branch_id: i64,
