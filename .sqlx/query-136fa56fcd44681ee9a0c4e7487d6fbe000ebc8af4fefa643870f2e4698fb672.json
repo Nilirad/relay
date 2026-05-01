@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE trigger_queue SET status = 'PROCESSING' WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "136fa56fcd44681ee9a0c4e7487d6fbe000ebc8af4fefa643870f2e4698fb672"
+}

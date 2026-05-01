@@ -1,0 +1,32 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id, event_payload, retry_count FROM trigger_queue \n         WHERE status IN ('PENDING') AND next_retry_at <= CURRENT_TIMESTAMP\n         ORDER BY next_retry_at ASC LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "event_payload",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "retry_count",
+        "ordinal": 2,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "c00a2d8ade4c3694eacc685ce35f5a9a54baecf9850d05896b5f411f5397e9b8"
+}

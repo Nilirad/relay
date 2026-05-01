@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE trigger_queue SET status = 'FAILED', retry_count = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "ac495bf0ce76c3fa19c8ccad29e39826df9845a3e0e0accd8625953d1c685b88"
+}

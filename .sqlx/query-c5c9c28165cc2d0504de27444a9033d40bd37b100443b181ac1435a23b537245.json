@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO trigger_queue (event_payload) VALUES (?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "c5c9c28165cc2d0504de27444a9033d40bd37b100443b181ac1435a23b537245"
+}
