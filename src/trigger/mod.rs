@@ -7,7 +7,7 @@ use tracing::{error, info, warn};
 use crate::{
     context::SharedContext,
     events::BranchUpdateEvent,
-    model::Subscriber,
+    model::{Subscriber, TriggerQueueItem},
     trigger::error::{RequestError, WorkflowTriggerError},
 };
 
@@ -60,8 +60,8 @@ async fn trigger_loop(engine: TriggerEngine) {
 
 /// Processes a single queued event.
 async fn process_queue(engine: &TriggerEngine) -> Result<(), WorkflowTriggerError> {
-    let oldest_pending_trigger = sqlx::query!(
-        "SELECT id, event_payload, retry_count FROM trigger_queue
+    let oldest_pending_trigger = sqlx::query_as::<_, TriggerQueueItem>(
+        "SELECT id, event_payload, status, retry_count, next_retry_at, created_at FROM trigger_queue
          WHERE status IN ('PENDING') AND next_retry_at <= CURRENT_TIMESTAMP
          ORDER BY next_retry_at ASC LIMIT 1"
     )

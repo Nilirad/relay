@@ -91,3 +91,31 @@ pub struct CreateSubscriber {
     /// Determines the value of [`Subscriber::gh_app_installation_id`].
     pub gh_app_installation_id: i64,
 }
+
+/// Represents a row in the `trigger_queue` table.
+#[derive(Debug, FromRow)]
+pub struct TriggerQueueItem {
+    /// Unique database primary key.
+    pub id: i64,
+
+    /// JSON representation of the `BranchUpdateEvent` payload.
+    pub event_payload: String,
+
+    /// Status of the trigger task
+    /// (one of `PENDING`, `PROCESSING`, `COMPLETED`, or `FAILED`).
+    #[allow(dead_code)]
+    pub status: String,
+
+    /// Number of times the task has been attempted.
+    pub retry_count: i64,
+
+    /// Next scheduled attempt timestamp,
+    /// in standard SQL `DATETIME` format (`YYYY-MM-DD HH:MM:SS`).
+    #[allow(dead_code)]
+    pub next_retry_at: String,
+
+    /// Creation timestamp of the record,
+    /// in standard SQL `DATETIME` format (`YYYY-MM-DD HH:MM:SS`).
+    #[allow(dead_code)]
+    pub created_at: String,
+}
