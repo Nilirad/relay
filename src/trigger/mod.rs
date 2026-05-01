@@ -165,10 +165,7 @@ async fn dispatch_events(
             .authenticator
             .request_installation_token(&sub)
             .await?;
-        let result = notify_subscriber(engine, iat, event, sub).await;
-        if let Err(e) = result {
-            error!("{e:?}");
-        }
+        notify_subscriber(engine, iat, event, sub).await?;
     }
 
     Ok(())
@@ -248,23 +245,97 @@ async fn send_repository_dispatch(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use super::*;
-    use crate::events::BranchUpdateEvent;
     use crate::test_utils::{MockAuthenticator, MockGitFetcher};
+    use std::sync::Arc;
 
     use tokio_util::sync::CancellationToken;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[tokio::test]
-    async fn test_dispatch_events() {
+    async fn test_get_oldest_queued_trigger() {
+        let pool = crate::test_utils::create_test_db().await;
+
+        // Insert some dummy items
+        sqlx::query!("INSERT INTO trigger_queue (event_payload, status, retry_count, next_retry_at) VALUES (?, ?, ?, datetime('now', '-1 minute'))",
+            "{}", "PENDING", 0).execute(&pool).await.unwrap();
+        sqlx::query!("INSERT INTO trigger_queue (event_payload, status, retry_count, next_retry_at) VALUES (?, ?, ?, datetime('now', '-5 minutes'))",
+            "{}", "PENDING", 0).execute(&pool).await.unwrap();
+        sqlx::query!("INSERT INTO trigger_queue (event_payload, status, retry_count, next_retry_at) VALUES (?, ?, ?, datetime('now', '+1 minute'))",
+            "{}", "PENDING", 0).execute(&pool).await.unwrap();
+
+        let trigger = get_oldest_queued_trigger(&pool).await.unwrap().unwrap();
+
+        // Assert: The one with -5 minutes should be returned
+        assert_eq!(trigger.retry_count, 0);
+
+        // Verify it was updated to PROCESSING
+        let db_trigger = sqlx::query!("SELECT status FROM trigger_queue WHERE id = ?", trigger.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(db_trigger.status, "PROCESSING");
+    }
+
+    #[tokio::test]
+    async fn test_schedule_retry() {
+        let pool = crate::test_utils::create_test_db().await;
+        let id = sqlx::query!("INSERT INTO trigger_queue (event_payload, status, retry_count, next_retry_at) VALUES (?, ?, ?, datetime('now'))",
+            "{}", "PROCESSING", 0).execute(&pool).await.unwrap().last_insert_rowid();
+
+        let trigger = TriggerQueueItem {
+            id,
+            event_payload: "{}".to_string(),
+            status: "PROCESSING".to_string(),
+            retry_count: 0,
+            next_retry_at: "0000-00-00 00:00:00".to_string(),
+            created_at: "0000-00-00 00:00:00".to_string(),
+        };
+
+        let engine = TriggerEngine {
+            ctx: SharedContext {
+                db_pool: pool.clone(),
+                token: CancellationToken::new(),
+                github_api_base_url: "http://mock".to_string(),
+                git_fetcher: Arc::new(MockGitFetcher {
+                    hash: "".to_string(),
+                }),
+            },
+            http_client: reqwest::Client::new(),
+            authenticator: Box::new(MockAuthenticator {
+                iat: "token".to_string(),
+            }),
+        };
+
+        schedule_retry(
+            &engine,
+            trigger,
+            WorkflowTriggerError::Api(RequestError::Response {
+                status: reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+                text: "error".to_string(),
+            }),
+        )
+        .await
+        .unwrap();
+
+        let updated = sqlx::query!(
+            "SELECT status, retry_count FROM trigger_queue WHERE id = ?",
+            id
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(updated.status, "PENDING");
+        assert_eq!(updated.retry_count, 1);
+    }
+
+    #[tokio::test]
+    async fn test_process_queue_failure_and_retry() {
         let pool = crate::test_utils::create_test_db().await;
         let mock_server = MockServer::start().await;
-        let http_client = reqwest::Client::new();
 
-        // Setup mock subscriber in DB
+        // Setup subscriber
         sqlx::query!(
             "INSERT INTO branches (repo_url, name) VALUES (?, ?)",
             "repo",
@@ -274,49 +345,50 @@ mod tests {
         .await
         .unwrap();
         sqlx::query!("INSERT INTO subscribers (branch_id, target_repo, event_type, gh_app_installation_id) VALUES (?, ?, ?, ?)",
-                     1, "org/target", "dispatch", 1)
-            .execute(&pool)
-            .await
-            .unwrap();
+                     1, "org/target", "dispatch", 1).execute(&pool).await.unwrap();
 
-        // Mock IAT token request
+        // Mock token success, but dispatch failure
         Mock::given(method("POST"))
             .and(path("/app/installations/1/access_tokens"))
             .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({"token": "mock-iat-token"})),
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"token": "token"})),
             )
             .mount(&mock_server)
             .await;
 
-        // Mock repository dispatch
         Mock::given(method("POST"))
             .and(path("/repos/org/target/dispatches"))
-            .respond_with(ResponseTemplate::new(204))
+            .respond_with(ResponseTemplate::new(500))
             .mount(&mock_server)
             .await;
 
-        let event = BranchUpdateEvent {
-            branch_id: 1,
-            new_hash: "new-hash".to_string(),
-        };
+        let payload = serde_json::json!({"branch_id": 1, "new_hash": "hash"}).to_string();
+        sqlx::query!("INSERT INTO trigger_queue (event_payload, status, retry_count, next_retry_at) VALUES (?, ?, ?, '2000-01-01 00:00:00')",
+            payload, "PENDING", 0).execute(&pool).await.unwrap();
 
-        let trigger_engine = TriggerEngine {
+        let engine = TriggerEngine {
             ctx: SharedContext {
-                db_pool: pool,
+                db_pool: pool.clone(),
                 token: CancellationToken::new(),
                 github_api_base_url: mock_server.uri(),
                 git_fetcher: Arc::new(MockGitFetcher {
                     hash: "".to_string(),
                 }),
             },
-            http_client,
+            http_client: reqwest::Client::new(),
             authenticator: Box::new(MockAuthenticator {
-                iat: "Test IAT".to_string(),
+                iat: "token".to_string(),
             }),
         };
 
-        let res = dispatch_events(&trigger_engine, &event).await;
-        assert!(res.is_ok());
+        process_queue(&engine).await.unwrap();
+
+        // Should still exist and retry_count increased
+        let trigger = sqlx::query!("SELECT retry_count, status FROM trigger_queue")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(trigger.retry_count, 1);
+        assert_eq!(trigger.status, "PENDING");
     }
 }
