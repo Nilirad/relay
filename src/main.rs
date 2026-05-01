@@ -47,7 +47,10 @@ async fn run_app() -> Result<(), FatalError> {
 
     tracing_subscriber::fmt::init();
 
-    let pool = sqlx::SqlitePool::connect("sqlite://relay.db?mode=rwc").await?;
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .acquire_timeout(std::time::Duration::from_secs(3))
+        .connect("sqlite://relay.db?mode=rwc")
+        .await?;
     let state = AppState {
         db_pool: pool.clone(),
     };
