@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT retry_count, status FROM trigger_queue",
+  "describe": {
+    "columns": [
+      {
+        "name": "retry_count",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "status",
+        "ordinal": 1,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "4822a2031ca7dca18a866caaa3c77823621059d8ab72ccff14555895584ec893"
+}

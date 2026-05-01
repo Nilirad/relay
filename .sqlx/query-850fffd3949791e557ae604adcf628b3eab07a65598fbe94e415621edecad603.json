@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO trigger_queue (event_payload, status, retry_count, next_retry_at) VALUES (?, ?, ?, datetime('now', '-1 minute'))",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "850fffd3949791e557ae604adcf628b3eab07a65598fbe94e415621edecad603"
+}

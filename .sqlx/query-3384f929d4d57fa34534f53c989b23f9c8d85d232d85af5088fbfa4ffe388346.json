@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO branches (repo_url, name, last_commit_hash) VALUES (?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "3384f929d4d57fa34534f53c989b23f9c8d85d232d85af5088fbfa4ffe388346"
+}
