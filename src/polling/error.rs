@@ -3,11 +3,8 @@
 use std::time::Duration;
 
 use thiserror::Error;
-use tokio::sync::mpsc::error::SendError;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, warn};
-
-use crate::events::BranchUpdateEvent;
 
 /// An error that interrupted a polling loop iteration.
 #[derive(Debug, Error)]
@@ -16,16 +13,16 @@ pub enum PollingError {
     #[error("Database operation failed: {0}")]
     DatabaseOperation(#[from] sqlx::Error),
 
-    /// Could not send a [`BranchUpdateEvent`].
-    #[error("Could not send branch update event: {0}")]
-    Channel(#[from] SendError<BranchUpdateEvent>),
+    /// Could not serialize [`BranchUpdateEvent`].
+    #[error("Could not serialize branch update event: {0}")]
+    Serialization(#[from] serde_json::Error),
 }
 
 /// Handles polling engine errors.
 pub(super) async fn handle_polling_error(error: PollingError, token: &CancellationToken) {
     match error {
         PollingError::DatabaseOperation(e) => handle_sqlx_error(e, token).await,
-        PollingError::Channel(e) => handle_channel_error(e, token).await,
+        PollingError::Serialization(e) => handle_serialization_error(e, token).await,
     }
 }
 
@@ -63,13 +60,13 @@ async fn handle_sqlx_error(error: sqlx::Error, token: &CancellationToken) {
     }
 }
 
-/// Handles an error of type [`PollingError::Channel`].
-async fn handle_channel_error(error: SendError<BranchUpdateEvent>, token: &CancellationToken) {
-    const DEFAULT_ERROR_SLEEP_SECS: u64 = 5 * 60;
+/// Handles an error of type [`PollingError::Serialization`].
+async fn handle_serialization_error(error: serde_json::Error, token: &CancellationToken) {
+    const SERIALIZATION_ERROR_COOLDOWN_SECS: u64 = 5 * 60;
 
-    warn!("{error}");
+    error!("{error}");
     tokio::select! {
-        _ = tokio::time::sleep(Duration::from_secs(DEFAULT_ERROR_SLEEP_SECS)) => {}
+        _ = tokio::time::sleep(Duration::from_secs(SERIALIZATION_ERROR_COOLDOWN_SECS)) => {}
         _ = token.cancelled() => {}
     }
 }

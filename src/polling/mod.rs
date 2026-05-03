@@ -2,16 +2,13 @@
 
 use std::time::Duration;
 
-use tokio::sync::mpsc::{Sender, error::SendError};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use crate::{
     context::SharedContext,
-    events::BranchUpdateEvent,
     polling::{
-        branch::BranchInfo,
-        db::{gather_updated_branches, update_branches_table},
+        db::gather_updated_branches,
         error::{PollingError, handle_polling_error},
     },
 };
@@ -22,32 +19,56 @@ mod error;
 pub mod git;
 
 /// Spawns an asynchronous task to periodically poll git branches for updates.
-pub fn start_polling_engine(ctx: SharedContext, tx: Sender<BranchUpdateEvent>) {
+pub fn start_polling_engine(ctx: SharedContext) {
     tokio::spawn(async move {
         info!("Polling engine started");
-        polling_loop(ctx, tx).await;
+        polling_loop(ctx).await;
     });
 }
 
 /// Controls whether to shut down the polling engine or run a polling cycle.
-async fn polling_loop(ctx: SharedContext, tx: Sender<BranchUpdateEvent>) {
+async fn polling_loop(ctx: SharedContext) {
     loop {
         tokio::select! {
-            res = poll_branches(&ctx, &tx) => {followup_poll(res, &ctx.token).await}
+            res = poll_branches(&ctx) => {followup_poll(res, &ctx.token).await}
             _ = ctx.token.cancelled() => break,
         }
     }
     info!("Gracefully shutting down polling engine");
 }
 
-/// Orchestrates polling operations.
-async fn poll_branches(
-    ctx: &SharedContext,
-    tx: &Sender<BranchUpdateEvent>,
-) -> Result<(), PollingError> {
+/// Polls branches for updates,
+/// updates them in the `branches` table,
+/// and queues the updates for the [`TriggerEngine`].
+///
+/// <!-- LINKS -->
+/// [`TriggerEngine`]: crate::trigger::TriggerEngine
+async fn poll_branches(ctx: &SharedContext) -> Result<(), PollingError> {
     let updated_branches = gather_updated_branches(&ctx.db_pool, ctx.git_fetcher.as_ref()).await?;
-    update_branches_table(&ctx.db_pool, &updated_branches).await?;
-    send_branch_update_events(&updated_branches, tx).await?;
+    if updated_branches.is_empty() {
+        return Ok(());
+    }
+
+    let mut transaction = ctx.db_pool.begin().await?;
+
+    for branch_info in &updated_branches {
+        crate::polling::db::write_db(branch_info, &mut *transaction).await?;
+
+        info!(
+            "New commit detected for branch {}. Hash: {}",
+            branch_info.branch.name, branch_info.latest_hash
+        );
+
+        sqlx::query!(
+            "INSERT INTO trigger_queue (branch_id, new_hash) VALUES (?, ?)",
+            branch_info.branch.id,
+            branch_info.latest_hash
+        )
+        .execute(&mut *transaction)
+        .await?;
+    }
+
+    transaction.commit().await?;
 
     Ok(())
 }
@@ -66,36 +87,16 @@ async fn followup_poll(res: Result<(), PollingError>, token: &CancellationToken)
     }
 }
 
-/// Sends [`BranchUpdateEvent`]s on a Tokio MPSC channel.
-async fn send_branch_update_events(
-    updated_branches: &[BranchInfo],
-    tx: &Sender<BranchUpdateEvent>,
-) -> Result<(), SendError<BranchUpdateEvent>> {
-    for branch_info in updated_branches {
-        info!(
-            "New commit detected for branch {}. Hash: {}",
-            branch_info.branch.name, branch_info.latest_hash
-        );
-
-        let event = BranchUpdateEvent {
-            branch_id: branch_info.branch.id,
-            new_hash: branch_info.latest_hash.clone(),
-        };
-        tx.send(event).await?;
-    }
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
+    use crate::context::SharedContext;
+    use crate::polling::poll_branches;
     use crate::test_utils::MockGitFetcher;
-
-    use super::*;
     use std::sync::Arc;
+    use tokio_util::sync::CancellationToken;
 
     #[tokio::test]
-    async fn test_poll_branches_updates_db() {
+    async fn test_poll_branches_updates_db_and_queues_trigger() {
         let pool = crate::test_utils::create_test_db().await;
 
         // Insert a branch
@@ -113,27 +114,29 @@ mod tests {
             hash: "new-hash".to_string(),
         });
 
-        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let ctx = SharedContext {
+            db_pool: pool.clone(),
+            git_fetcher: mock_fetcher,
+            token: CancellationToken::new(),
+            github_api_base_url: "".to_string(),
+        };
 
-        let updated_branches = gather_updated_branches(&pool, mock_fetcher.as_ref())
-            .await
-            .unwrap();
-        update_branches_table(&pool, &updated_branches)
-            .await
-            .unwrap();
-        send_branch_update_events(&updated_branches, &tx)
-            .await
-            .unwrap();
+        poll_branches(&ctx).await.unwrap();
 
         // Verify DB update
-        let branch = sqlx::query!("SELECT last_commit_hash FROM branches WHERE id = 1")
+        let branch = sqlx::query!("SELECT last_commit_hash FROM branches WHERE name = 'main'")
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(branch.last_commit_hash.unwrap(), "new-hash");
+        assert_eq!(branch.last_commit_hash, Some("new-hash".to_string()));
 
-        // Verify event sent
-        let event = rx.recv().await.unwrap();
-        assert_eq!(event.new_hash, "new-hash");
+        // Verify trigger queued
+        let queued_event = sqlx::query!("SELECT branch_id, new_hash FROM trigger_queue")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+        assert_eq!(queued_event.branch_id, 1);
+        assert_eq!(queued_event.new_hash, "new-hash");
     }
 }

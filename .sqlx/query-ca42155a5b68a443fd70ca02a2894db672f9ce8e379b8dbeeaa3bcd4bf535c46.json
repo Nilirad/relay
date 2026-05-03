@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE trigger_queue\n         SET status = 'PENDING', status_updated_at = CURRENT_TIMESTAMP\n         WHERE status = 'PROCESSING'\n           AND status_updated_at < DATETIME('now', '-5 minutes')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "ca42155a5b68a443fd70ca02a2894db672f9ce8e379b8dbeeaa3bcd4bf535c46"
+}

@@ -19,7 +19,6 @@ use tracing::error;
 use crate::{
     context::SharedContext,
     error::{ClientCreationError, FatalError},
-    events::BranchUpdateEvent,
     handler::{create_branch, create_subscriber},
     state::AppState,
     trigger::{GitHubAuthenticator, TriggerEngine, get_auth_credentials},
@@ -27,7 +26,6 @@ use crate::{
 
 mod context;
 mod error;
-mod events;
 mod handler;
 mod model;
 mod polling;
@@ -43,11 +41,12 @@ async fn main() {
 
 /// Runs the server, delegating errors to the caller.
 async fn run_app() -> Result<(), FatalError> {
-    const BRANCH_UPDATE_EVENT_BUFFER_SIZE: usize = 64;
-
     tracing_subscriber::fmt::init();
 
-    let pool = sqlx::SqlitePool::connect("sqlite://relay.db?mode=rwc").await?;
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .acquire_timeout(std::time::Duration::from_secs(3))
+        .connect("sqlite://relay.db?mode=rwc")
+        .await?;
     let state = AppState {
         db_pool: pool.clone(),
     };
@@ -61,8 +60,10 @@ async fn run_app() -> Result<(), FatalError> {
         github_api_base_url: "https://api.github.com".to_string(),
         git_fetcher: std::sync::Arc::new(crate::polling::git::MainGitFetcher),
     };
-    let (tx, rx) = tokio::sync::mpsc::channel::<BranchUpdateEvent>(BRANCH_UPDATE_EVENT_BUFFER_SIZE);
-    polling::start_polling_engine(ctx.clone(), tx);
+
+    crate::trigger::recover_stuck_tasks(&pool).await?;
+
+    polling::start_polling_engine(ctx.clone());
 
     let authenticator = Box::new(GitHubAuthenticator {
         credentials: get_auth_credentials()?,
@@ -71,7 +72,6 @@ async fn run_app() -> Result<(), FatalError> {
     let trigger_engine = TriggerEngine {
         ctx,
         http_client,
-        rx,
         authenticator,
     };
 

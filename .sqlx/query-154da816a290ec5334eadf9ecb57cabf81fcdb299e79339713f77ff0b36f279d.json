@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT branch_id, new_hash FROM trigger_queue",
+  "describe": {
+    "columns": [
+      {
+        "name": "branch_id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "new_hash",
+        "ordinal": 1,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "154da816a290ec5334eadf9ecb57cabf81fcdb299e79339713f77ff0b36f279d"
+}

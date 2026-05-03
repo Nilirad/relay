@@ -2,13 +2,11 @@
 
 use reqwest::Client;
 use sqlx::SqlitePool;
-use tokio::sync::mpsc::Receiver;
-use tracing::{error, info};
+use tracing::{info, warn};
 
 use crate::{
     context::SharedContext,
-    events::BranchUpdateEvent,
-    model::Subscriber,
+    model::{Subscriber, TriggerQueueItem},
     trigger::error::{RequestError, WorkflowTriggerError},
 };
 
@@ -26,9 +24,6 @@ pub struct TriggerEngine {
     /// HTTP client to make requests to the GitHub API.
     pub http_client: Client,
 
-    /// Receives [`BranchUpdateEvent`]s.
-    pub rx: Receiver<BranchUpdateEvent>,
-
     /// Authenticates requests to the GitHub API.
     pub authenticator: Box<dyn Authenticator + Send + Sync>,
 }
@@ -36,8 +31,8 @@ pub struct TriggerEngine {
 impl TriggerEngine {
     /// Spawns an asynchronous task to trigger repository workflows.
     ///
-    /// The spawned task will listen to [`BranchUpdateEvent`]s,
-    /// triggering a workflow for each event it receives.
+    /// The spawned task will periodically read the `trigger_queue` table,
+    /// triggering a workflow for each event it processes.
     pub fn start(self) {
         tokio::spawn(async move {
             info!("Trigger engine started");
@@ -46,60 +41,149 @@ impl TriggerEngine {
     }
 }
 
-/// Controls whether to shut down the trigger engine or process a [`BranchUpdateEvent`].
-async fn trigger_loop(mut engine: TriggerEngine) {
+/// Controls whether to shut down the trigger engine or process a queued event.
+async fn trigger_loop(engine: TriggerEngine) {
+    const QUEUE_POLLING_INTERVAL_SECS: u64 = 5;
     loop {
         tokio::select! {
-            Some(event) = engine.rx.recv() => handle_branch_update(&engine, event).await,
             _ = engine.ctx.token.cancelled() => break,
+            _ = tokio::time::sleep(tokio::time::Duration::from_secs(QUEUE_POLLING_INTERVAL_SECS)) => {
+                if let Err(e) = process_queue(&engine).await {
+                    warn!("Error processing queue: {e}");
+                }
+            }
         }
     }
     info!("Gracefully shutting down trigger engine");
 }
 
-/// Handles a [`BranchUpdateEvent`], handling any possible error.
-async fn handle_branch_update(engine: &TriggerEngine, event: BranchUpdateEvent) {
-    let result = dispatch_events(engine, event).await;
+/// Processes a single queued event.
+async fn process_queue(engine: &TriggerEngine) -> Result<(), WorkflowTriggerError> {
+    let Some(trigger) = get_oldest_queued_trigger(&engine.ctx.db_pool).await? else {
+        return Ok(());
+    };
 
-    if let Err(e) = result {
-        error!("{e}");
-    }
-}
-
-/// Sends a `repository_dispatch` event for each relevant [`Subscriber`].
-async fn dispatch_events(
-    engine: &TriggerEngine,
-    event: BranchUpdateEvent,
-) -> Result<(), WorkflowTriggerError> {
-    info!(
-        "Received update event for branch {}: {}",
-        event.branch_id, event.new_hash
-    );
-
-    let subscribers = get_subscribers(&engine.ctx.db_pool, &event).await?;
-
-    for sub in subscribers {
-        let iat = engine
-            .authenticator
-            .request_installation_token(&sub)
-            .await?;
-        let result = notify_subscriber(engine, iat, &event, sub).await;
-        if let Err(e) = result {
-            error!("{e:?}");
+    let dispatch_result = dispatch_events(engine, &trigger).await;
+    match dispatch_result {
+        Ok(_) => {
+            delete_trigger_from_queue(engine, &trigger).await?;
+        }
+        Err(e) => {
+            warn!("Dispatch failed: {e}");
+            schedule_retry(engine, trigger, e).await?;
         }
     }
 
     Ok(())
 }
 
-/// Gets all the [`Subscriber`]s subscribed to the [`BranchUpdateEvent`].
+/// Returns the oldest `PENDING` trigger in the `trigger_queue` table.
+async fn get_oldest_queued_trigger(
+    pool: &SqlitePool,
+) -> Result<Option<TriggerQueueItem>, sqlx::Error> {
+    let trigger = sqlx::query_as::<_, TriggerQueueItem>(
+        "SELECT id, branch_id, new_hash, retry_count FROM trigger_queue
+         WHERE status IN ('PENDING') AND next_retry_at <= CURRENT_TIMESTAMP
+         ORDER BY next_retry_at ASC LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    let Some(trigger) = trigger else {
+        return Ok(None);
+    };
+
+    sqlx::query!(
+        "UPDATE trigger_queue SET status = 'PROCESSING', status_updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        trigger.id
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(Some(trigger))
+}
+
+/// Deletes a successful trigger from the `trigger_queue`.
+async fn delete_trigger_from_queue(
+    engine: &TriggerEngine,
+    trigger: &TriggerQueueItem,
+) -> Result<(), sqlx::Error> {
+    sqlx::query!("DELETE FROM trigger_queue WHERE id = ?", trigger.id)
+        .execute(&engine.ctx.db_pool)
+        .await?;
+    Ok(())
+}
+
+/// Schedules the next retry for a trigger in the `trigger_queue`.
+async fn schedule_retry(
+    engine: &TriggerEngine,
+    trigger: TriggerQueueItem,
+    e: WorkflowTriggerError,
+) -> Result<(), WorkflowTriggerError> {
+    let next_retry_count = trigger.retry_count + 1;
+
+    if next_retry_count >= 10 {
+        tracing::warn!("Task {} failed after 10 attempts: {e}", trigger.id);
+        sqlx::query!(
+            "UPDATE trigger_queue SET status = 'FAILED', retry_count = ? WHERE id = ?",
+            next_retry_count,
+            trigger.id
+        )
+        .execute(&engine.ctx.db_pool)
+        .await?;
+    } else {
+        let backoff_secs = 10 * (1 << (next_retry_count - 1));
+        sqlx::query!("UPDATE trigger_queue SET status = 'PENDING', retry_count = ?, next_retry_at = datetime('now', ? || ' seconds') WHERE id = ?",
+            next_retry_count, backoff_secs, trigger.id).execute(&engine.ctx.db_pool).await?;
+    }
+
+    Ok(())
+}
+
+/// Recovers tasks that have been stuck in `PROCESSING` for too long.
+pub async fn recover_stuck_tasks(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    sqlx::query!(
+        "UPDATE trigger_queue
+         SET status = 'PENDING', status_updated_at = CURRENT_TIMESTAMP
+         WHERE status = 'PROCESSING'
+           AND status_updated_at < DATETIME('now', '-5 minutes')"
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Sends a `repository_dispatch` event for each relevant [`Subscriber`].
+pub async fn dispatch_events(
+    engine: &TriggerEngine,
+    trigger: &TriggerQueueItem,
+) -> Result<(), WorkflowTriggerError> {
+    info!(
+        "Received update event for branch {}: {}",
+        trigger.branch_id, trigger.new_hash
+    );
+
+    let subscribers = get_subscribers(&engine.ctx.db_pool, trigger).await?;
+
+    for sub in subscribers {
+        let iat = engine
+            .authenticator
+            .request_installation_token(&sub)
+            .await?;
+        notify_subscriber(engine, iat, trigger, sub).await?;
+    }
+
+    Ok(())
+}
+
+/// Gets all the [`Subscriber`]s subscribed to the branch update.
 async fn get_subscribers(
     pool: &SqlitePool,
-    event: &BranchUpdateEvent,
+    trigger: &TriggerQueueItem,
 ) -> Result<Vec<Subscriber>, WorkflowTriggerError> {
     let subscribers =
         sqlx::query_as::<_, Subscriber>("SELECT * FROM subscribers WHERE branch_id = ?")
-            .bind(event.branch_id)
+            .bind(trigger.branch_id)
             .fetch_all(pool)
             .await?;
 
@@ -111,10 +195,10 @@ async fn get_subscribers(
 async fn notify_subscriber(
     engine: &TriggerEngine,
     iat: String,
-    event: &BranchUpdateEvent,
+    trigger: &TriggerQueueItem,
     sub: Subscriber,
 ) -> Result<(), WorkflowTriggerError> {
-    send_repository_dispatch(engine, &iat, event, &sub).await?;
+    send_repository_dispatch(engine, &iat, trigger, &sub).await?;
     Ok(())
 }
 
@@ -122,7 +206,7 @@ async fn notify_subscriber(
 async fn send_repository_dispatch(
     engine: &TriggerEngine,
     iat: &str,
-    event: &BranchUpdateEvent,
+    trigger: &TriggerQueueItem,
     sub: &Subscriber,
 ) -> Result<(), WorkflowTriggerError> {
     let api_url = format!(
@@ -133,8 +217,8 @@ async fn send_repository_dispatch(
     let payload = serde_json::json!({
         "event_type": sub.event_type,
         "client_payload": {
-            "branch_id": event.branch_id.to_string(),
-            "new_commit_hash": event.new_hash
+            "branch_id": trigger.branch_id.to_string(),
+            "new_commit_hash": trigger.new_hash
        }
     });
 
@@ -166,23 +250,131 @@ async fn send_repository_dispatch(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    #![allow(
+        clippy::panic,
+        clippy::expect_used,
+        clippy::todo,
+        clippy::unimplemented,
+        clippy::indexing_slicing
+    )]
 
     use super::*;
-    use crate::events::BranchUpdateEvent;
     use crate::test_utils::{MockAuthenticator, MockGitFetcher};
+    use std::sync::Arc;
 
     use tokio_util::sync::CancellationToken;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[tokio::test]
-    async fn test_dispatch_events() {
+    async fn test_recover_stuck_tasks() {
+        let pool = crate::test_utils::create_test_db().await;
+
+        // Insert tasks
+        // 1. Processing (stuck)
+        sqlx::query!("INSERT INTO trigger_queue (branch_id, new_hash, status, retry_count, status_updated_at) VALUES (?, ?, ?, ?, DATETIME('now', '-10 minutes'))",
+            1, "hash", "PROCESSING", 0).execute(&pool).await.unwrap();
+        // 2. Processing (recent)
+        sqlx::query!("INSERT INTO trigger_queue (branch_id, new_hash, status, retry_count, status_updated_at) VALUES (?, ?, ?, ?, DATETIME('now', '-1 minute'))",
+            1, "hash", "PROCESSING", 0).execute(&pool).await.unwrap();
+        // 3. Pending
+        sqlx::query!("INSERT INTO trigger_queue (branch_id, new_hash, status, retry_count, status_updated_at) VALUES (?, ?, ?, ?, DATETIME('now'))",
+            1, "hash", "PENDING", 0).execute(&pool).await.unwrap();
+
+        recover_stuck_tasks(&pool).await.unwrap();
+
+        // Check status
+        let tasks = sqlx::query!("SELECT status FROM trigger_queue ORDER BY rowid")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+
+        assert_eq!(tasks[0].status, "PENDING"); // was stuck
+        assert_eq!(tasks[1].status, "PROCESSING"); // was recent
+        assert_eq!(tasks[2].status, "PENDING"); // was pending
+    }
+
+    #[tokio::test]
+    async fn test_get_oldest_queued_trigger() {
+        let pool = crate::test_utils::create_test_db().await;
+
+        // Insert some dummy items
+        sqlx::query!("INSERT INTO trigger_queue (branch_id, new_hash, status, retry_count, next_retry_at) VALUES (?, ?, ?, ?, datetime('now', '-1 minute'))",
+            1, "hash", "PENDING", 0).execute(&pool).await.unwrap();
+        sqlx::query!("INSERT INTO trigger_queue (branch_id, new_hash, status, retry_count, next_retry_at) VALUES (?, ?, ?, ?, datetime('now', '-5 minutes'))",
+            1, "hash", "PENDING", 0).execute(&pool).await.unwrap();
+        sqlx::query!("INSERT INTO trigger_queue (branch_id, new_hash, status, retry_count, next_retry_at) VALUES (?, ?, ?, ?, datetime('now', '+1 minute'))",
+            1, "hash", "PENDING", 0).execute(&pool).await.unwrap();
+
+        let trigger = get_oldest_queued_trigger(&pool).await.unwrap().unwrap();
+
+        // Assert: The one with -5 minutes should be returned
+        assert_eq!(trigger.retry_count, 0);
+
+        // Verify it was updated to PROCESSING
+        let db_trigger = sqlx::query!("SELECT status FROM trigger_queue WHERE id = ?", trigger.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(db_trigger.status, "PROCESSING");
+    }
+
+    #[tokio::test]
+    async fn test_schedule_retry() {
+        let pool = crate::test_utils::create_test_db().await;
+        let id = sqlx::query!("INSERT INTO trigger_queue (branch_id, new_hash, status, retry_count, next_retry_at) VALUES (?, ?, ?, ?, datetime('now'))",
+            1, "hash", "PROCESSING", 0).execute(&pool).await.unwrap().last_insert_rowid();
+
+        let trigger = TriggerQueueItem {
+            id,
+            branch_id: 1,
+            new_hash: "hash".to_string(),
+            retry_count: 0,
+        };
+
+        let engine = TriggerEngine {
+            ctx: SharedContext {
+                db_pool: pool.clone(),
+                token: CancellationToken::new(),
+                github_api_base_url: "http://mock".to_string(),
+                git_fetcher: Arc::new(MockGitFetcher {
+                    hash: "".to_string(),
+                }),
+            },
+            http_client: reqwest::Client::new(),
+            authenticator: Box::new(MockAuthenticator {
+                iat: "token".to_string(),
+            }),
+        };
+
+        schedule_retry(
+            &engine,
+            trigger,
+            WorkflowTriggerError::Api(RequestError::Response {
+                status: reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+                text: "error".to_string(),
+            }),
+        )
+        .await
+        .unwrap();
+
+        let updated = sqlx::query!(
+            "SELECT status, retry_count FROM trigger_queue WHERE id = ?",
+            id
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(updated.status, "PENDING");
+        assert_eq!(updated.retry_count, 1);
+    }
+
+    #[tokio::test]
+    async fn test_process_queue_failure_and_retry() {
         let pool = crate::test_utils::create_test_db().await;
         let mock_server = MockServer::start().await;
-        let http_client = reqwest::Client::new();
 
-        // Setup mock subscriber in DB
+        // Setup subscriber
         sqlx::query!(
             "INSERT INTO branches (repo_url, name) VALUES (?, ?)",
             "repo",
@@ -192,50 +384,49 @@ mod tests {
         .await
         .unwrap();
         sqlx::query!("INSERT INTO subscribers (branch_id, target_repo, event_type, gh_app_installation_id) VALUES (?, ?, ?, ?)",
-                     1, "org/target", "dispatch", 1)
-            .execute(&pool)
-            .await
-            .unwrap();
+                     1, "org/target", "dispatch", 1).execute(&pool).await.unwrap();
 
-        // Mock IAT token request
+        // Mock token success, but dispatch failure
         Mock::given(method("POST"))
             .and(path("/app/installations/1/access_tokens"))
             .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({"token": "mock-iat-token"})),
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"token": "token"})),
             )
             .mount(&mock_server)
             .await;
 
-        // Mock repository dispatch
         Mock::given(method("POST"))
             .and(path("/repos/org/target/dispatches"))
-            .respond_with(ResponseTemplate::new(204))
+            .respond_with(ResponseTemplate::new(500))
             .mount(&mock_server)
             .await;
 
-        let event = BranchUpdateEvent {
-            branch_id: 1,
-            new_hash: "new-hash".to_string(),
-        };
+        sqlx::query!("INSERT INTO trigger_queue (branch_id, new_hash, status, retry_count, next_retry_at) VALUES (?, ?, ?, ?, '2000-01-01 00:00:00')",
+            1, "hash", "PENDING", 0).execute(&pool).await.unwrap();
 
-        let trigger_engine = TriggerEngine {
+        let engine = TriggerEngine {
             ctx: SharedContext {
-                db_pool: pool,
+                db_pool: pool.clone(),
                 token: CancellationToken::new(),
                 github_api_base_url: mock_server.uri(),
                 git_fetcher: Arc::new(MockGitFetcher {
                     hash: "".to_string(),
                 }),
             },
-            http_client,
-            rx: tokio::sync::mpsc::channel::<BranchUpdateEvent>(1).1,
+            http_client: reqwest::Client::new(),
             authenticator: Box::new(MockAuthenticator {
-                iat: "Test IAT".to_string(),
+                iat: "token".to_string(),
             }),
         };
 
-        let res = dispatch_events(&trigger_engine, event).await;
-        assert!(res.is_ok());
+        process_queue(&engine).await.unwrap();
+
+        // Should still exist and retry_count increased
+        let trigger = sqlx::query!("SELECT retry_count, status FROM trigger_queue")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(trigger.retry_count, 1);
+        assert_eq!(trigger.status, "PENDING");
     }
 }

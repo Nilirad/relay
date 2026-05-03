@@ -91,3 +91,19 @@ pub struct CreateSubscriber {
     /// Determines the value of [`Subscriber::gh_app_installation_id`].
     pub gh_app_installation_id: i64,
 }
+
+/// Represents a row in the `trigger_queue` table.
+#[derive(Debug, FromRow)]
+pub struct TriggerQueueItem {
+    /// Unique database primary key.
+    pub id: i64,
+
+    /// Foreign key to [`Branch::id`].
+    pub branch_id: i64,
+
+    /// The hash of the latest commit on the branch.
+    pub new_hash: String,
+
+    /// Number of times the task has been attempted.
+    pub retry_count: i64,
+}
