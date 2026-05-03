@@ -273,6 +273,14 @@ async fn send_repository_dispatch(
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::panic,
+        clippy::expect_used,
+        clippy::todo,
+        clippy::unimplemented,
+        clippy::indexing_slicing
+    )]
+
     use super::*;
     use crate::test_utils::{MockAuthenticator, MockGitFetcher};
     use std::sync::Arc;
