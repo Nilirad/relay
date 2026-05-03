@@ -2,11 +2,10 @@
 
 use reqwest::Client;
 use sqlx::SqlitePool;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 use crate::{
     context::SharedContext,
-    events::BranchUpdateEvent,
     model::{Subscriber, TriggerQueueItem},
     trigger::error::{RequestError, WorkflowTriggerError},
 };
@@ -64,24 +63,13 @@ async fn process_queue(engine: &TriggerEngine) -> Result<(), WorkflowTriggerErro
         return Ok(());
     };
 
-    let event: BranchUpdateEvent = match serde_json::from_str(&trigger.event_payload) {
-        Ok(event) => event,
-        Err(e) => {
-            error!("Failed to deserialize payload for {}: {}", trigger.id, e);
-            mark_task_as_failed(&engine.ctx.db_pool, trigger.id).await?;
-            return Err(WorkflowTriggerError::Api(RequestError::Response {
-                status: reqwest::StatusCode::INTERNAL_SERVER_ERROR,
-                text: e.to_string(),
-            }));
-        }
-    };
-
-    let dispatch_result = dispatch_events(engine, &event).await;
+    let dispatch_result = dispatch_events(engine, &trigger).await;
     match dispatch_result {
         Ok(_) => {
             delete_trigger_from_queue(engine, &trigger).await?;
         }
         Err(e) => {
+            warn!("Dispatch failed: {e}");
             schedule_retry(engine, trigger, e).await?;
         }
     }
@@ -94,9 +82,9 @@ async fn get_oldest_queued_trigger(
     pool: &SqlitePool,
 ) -> Result<Option<TriggerQueueItem>, sqlx::Error> {
     let trigger = sqlx::query_as::<_, TriggerQueueItem>(
-        "SELECT id, event_payload, status, retry_count, next_retry_at, created_at, status_updated_at FROM trigger_queue
+        "SELECT id, branch_id, new_hash, retry_count FROM trigger_queue
          WHERE status IN ('PENDING') AND next_retry_at <= CURRENT_TIMESTAMP
-         ORDER BY next_retry_at ASC LIMIT 1"
+         ORDER BY next_retry_at ASC LIMIT 1",
     )
     .fetch_optional(pool)
     .await?;
@@ -123,17 +111,6 @@ async fn delete_trigger_from_queue(
     sqlx::query!("DELETE FROM trigger_queue WHERE id = ?", trigger.id)
         .execute(&engine.ctx.db_pool)
         .await?;
-    Ok(())
-}
-
-/// Marks a trigger as `FAILED` in the `trigger_queue`.
-async fn mark_task_as_failed(pool: &SqlitePool, id: i64) -> Result<(), sqlx::Error> {
-    sqlx::query!(
-        "UPDATE trigger_queue SET status = 'FAILED' WHERE id = ?",
-        id
-    )
-    .execute(pool)
-    .await?;
     Ok(())
 }
 
@@ -179,34 +156,34 @@ pub async fn recover_stuck_tasks(pool: &SqlitePool) -> Result<(), sqlx::Error> {
 /// Sends a `repository_dispatch` event for each relevant [`Subscriber`].
 pub async fn dispatch_events(
     engine: &TriggerEngine,
-    event: &BranchUpdateEvent,
+    trigger: &TriggerQueueItem,
 ) -> Result<(), WorkflowTriggerError> {
     info!(
         "Received update event for branch {}: {}",
-        event.branch_id, event.new_hash
+        trigger.branch_id, trigger.new_hash
     );
 
-    let subscribers = get_subscribers(&engine.ctx.db_pool, event).await?;
+    let subscribers = get_subscribers(&engine.ctx.db_pool, trigger).await?;
 
     for sub in subscribers {
         let iat = engine
             .authenticator
             .request_installation_token(&sub)
             .await?;
-        notify_subscriber(engine, iat, event, sub).await?;
+        notify_subscriber(engine, iat, trigger, sub).await?;
     }
 
     Ok(())
 }
 
-/// Gets all the [`Subscriber`]s subscribed to the [`BranchUpdateEvent`].
+/// Gets all the [`Subscriber`]s subscribed to the branch update.
 async fn get_subscribers(
     pool: &SqlitePool,
-    event: &BranchUpdateEvent,
+    trigger: &TriggerQueueItem,
 ) -> Result<Vec<Subscriber>, WorkflowTriggerError> {
     let subscribers =
         sqlx::query_as::<_, Subscriber>("SELECT * FROM subscribers WHERE branch_id = ?")
-            .bind(event.branch_id)
+            .bind(trigger.branch_id)
             .fetch_all(pool)
             .await?;
 
@@ -218,10 +195,10 @@ async fn get_subscribers(
 async fn notify_subscriber(
     engine: &TriggerEngine,
     iat: String,
-    event: &BranchUpdateEvent,
+    trigger: &TriggerQueueItem,
     sub: Subscriber,
 ) -> Result<(), WorkflowTriggerError> {
-    send_repository_dispatch(engine, &iat, event, &sub).await?;
+    send_repository_dispatch(engine, &iat, trigger, &sub).await?;
     Ok(())
 }
 
@@ -229,7 +206,7 @@ async fn notify_subscriber(
 async fn send_repository_dispatch(
     engine: &TriggerEngine,
     iat: &str,
-    event: &BranchUpdateEvent,
+    trigger: &TriggerQueueItem,
     sub: &Subscriber,
 ) -> Result<(), WorkflowTriggerError> {
     let api_url = format!(
@@ -240,8 +217,8 @@ async fn send_repository_dispatch(
     let payload = serde_json::json!({
         "event_type": sub.event_type,
         "client_payload": {
-            "branch_id": event.branch_id.to_string(),
-            "new_commit_hash": event.new_hash
+            "branch_id": trigger.branch_id.to_string(),
+            "new_commit_hash": trigger.new_hash
        }
     });
 
@@ -295,14 +272,14 @@ mod tests {
 
         // Insert tasks
         // 1. Processing (stuck)
-        sqlx::query!("INSERT INTO trigger_queue (event_payload, status, retry_count, status_updated_at) VALUES (?, ?, ?, DATETIME('now', '-10 minutes'))",
-            "{}", "PROCESSING", 0).execute(&pool).await.unwrap();
+        sqlx::query!("INSERT INTO trigger_queue (branch_id, new_hash, status, retry_count, status_updated_at) VALUES (?, ?, ?, ?, DATETIME('now', '-10 minutes'))",
+            1, "hash", "PROCESSING", 0).execute(&pool).await.unwrap();
         // 2. Processing (recent)
-        sqlx::query!("INSERT INTO trigger_queue (event_payload, status, retry_count, status_updated_at) VALUES (?, ?, ?, DATETIME('now', '-1 minute'))",
-            "{}", "PROCESSING", 0).execute(&pool).await.unwrap();
+        sqlx::query!("INSERT INTO trigger_queue (branch_id, new_hash, status, retry_count, status_updated_at) VALUES (?, ?, ?, ?, DATETIME('now', '-1 minute'))",
+            1, "hash", "PROCESSING", 0).execute(&pool).await.unwrap();
         // 3. Pending
-        sqlx::query!("INSERT INTO trigger_queue (event_payload, status, retry_count, status_updated_at) VALUES (?, ?, ?, DATETIME('now'))",
-            "{}", "PENDING", 0).execute(&pool).await.unwrap();
+        sqlx::query!("INSERT INTO trigger_queue (branch_id, new_hash, status, retry_count, status_updated_at) VALUES (?, ?, ?, ?, DATETIME('now'))",
+            1, "hash", "PENDING", 0).execute(&pool).await.unwrap();
 
         recover_stuck_tasks(&pool).await.unwrap();
 
@@ -322,12 +299,12 @@ mod tests {
         let pool = crate::test_utils::create_test_db().await;
 
         // Insert some dummy items
-        sqlx::query!("INSERT INTO trigger_queue (event_payload, status, retry_count, next_retry_at) VALUES (?, ?, ?, datetime('now', '-1 minute'))",
-            "{}", "PENDING", 0).execute(&pool).await.unwrap();
-        sqlx::query!("INSERT INTO trigger_queue (event_payload, status, retry_count, next_retry_at) VALUES (?, ?, ?, datetime('now', '-5 minutes'))",
-            "{}", "PENDING", 0).execute(&pool).await.unwrap();
-        sqlx::query!("INSERT INTO trigger_queue (event_payload, status, retry_count, next_retry_at) VALUES (?, ?, ?, datetime('now', '+1 minute'))",
-            "{}", "PENDING", 0).execute(&pool).await.unwrap();
+        sqlx::query!("INSERT INTO trigger_queue (branch_id, new_hash, status, retry_count, next_retry_at) VALUES (?, ?, ?, ?, datetime('now', '-1 minute'))",
+            1, "hash", "PENDING", 0).execute(&pool).await.unwrap();
+        sqlx::query!("INSERT INTO trigger_queue (branch_id, new_hash, status, retry_count, next_retry_at) VALUES (?, ?, ?, ?, datetime('now', '-5 minutes'))",
+            1, "hash", "PENDING", 0).execute(&pool).await.unwrap();
+        sqlx::query!("INSERT INTO trigger_queue (branch_id, new_hash, status, retry_count, next_retry_at) VALUES (?, ?, ?, ?, datetime('now', '+1 minute'))",
+            1, "hash", "PENDING", 0).execute(&pool).await.unwrap();
 
         let trigger = get_oldest_queued_trigger(&pool).await.unwrap().unwrap();
 
@@ -345,12 +322,13 @@ mod tests {
     #[tokio::test]
     async fn test_schedule_retry() {
         let pool = crate::test_utils::create_test_db().await;
-        let id = sqlx::query!("INSERT INTO trigger_queue (event_payload, status, retry_count, next_retry_at) VALUES (?, ?, ?, datetime('now'))",
-            "{}", "PROCESSING", 0).execute(&pool).await.unwrap().last_insert_rowid();
+        let id = sqlx::query!("INSERT INTO trigger_queue (branch_id, new_hash, status, retry_count, next_retry_at) VALUES (?, ?, ?, ?, datetime('now'))",
+            1, "hash", "PROCESSING", 0).execute(&pool).await.unwrap().last_insert_rowid();
 
         let trigger = TriggerQueueItem {
             id,
-            event_payload: "{}".to_string(),
+            branch_id: 1,
+            new_hash: "hash".to_string(),
             retry_count: 0,
         };
 
@@ -423,9 +401,8 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let payload = serde_json::json!({"branch_id": 1, "new_hash": "hash"}).to_string();
-        sqlx::query!("INSERT INTO trigger_queue (event_payload, status, retry_count, next_retry_at) VALUES (?, ?, ?, '2000-01-01 00:00:00')",
-            payload, "PENDING", 0).execute(&pool).await.unwrap();
+        sqlx::query!("INSERT INTO trigger_queue (branch_id, new_hash, status, retry_count, next_retry_at) VALUES (?, ?, ?, ?, '2000-01-01 00:00:00')",
+            1, "hash", "PENDING", 0).execute(&pool).await.unwrap();
 
         let engine = TriggerEngine {
             ctx: SharedContext {
@@ -451,41 +428,5 @@ mod tests {
             .unwrap();
         assert_eq!(trigger.retry_count, 1);
         assert_eq!(trigger.status, "PENDING");
-    }
-
-    #[tokio::test]
-    async fn test_process_queue_deserialization_failure() {
-        let pool = crate::test_utils::create_test_db().await;
-        let mock_server = MockServer::start().await;
-
-        // Insert invalid JSON payload
-        sqlx::query!("INSERT INTO trigger_queue (event_payload, status, retry_count, next_retry_at) VALUES (?, ?, ?, '2000-01-01 00:00:00')",
-            "invalid json", "PENDING", 0).execute(&pool).await.unwrap();
-
-        let engine = TriggerEngine {
-            ctx: SharedContext {
-                db_pool: pool.clone(),
-                token: CancellationToken::new(),
-                github_api_base_url: mock_server.uri(),
-                git_fetcher: Arc::new(MockGitFetcher {
-                    hash: "".to_string(),
-                }),
-            },
-            http_client: reqwest::Client::new(),
-            authenticator: Box::new(MockAuthenticator {
-                iat: "token".to_string(),
-            }),
-        };
-
-        // Should return error
-        let result = process_queue(&engine).await;
-        assert!(result.is_err());
-
-        // Should be marked as FAILED
-        let trigger = sqlx::query!("SELECT status FROM trigger_queue")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert_eq!(trigger.status, "FAILED");
     }
 }

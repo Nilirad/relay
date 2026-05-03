@@ -14,9 +14,6 @@ pub enum PollingError {
     DatabaseOperation(#[from] sqlx::Error),
 
     /// Could not serialize [`BranchUpdateEvent`].
-    ///
-    /// <!-- LINKS -->
-    /// [`BranchUpdateEvent`]: crate::events::BranchUpdateEvent
     #[error("Could not serialize branch update event: {0}")]
     Serialization(#[from] serde_json::Error),
 }

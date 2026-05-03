@@ -59,16 +59,10 @@ async fn poll_branches(ctx: &SharedContext) -> Result<(), PollingError> {
             branch_info.branch.name, branch_info.latest_hash
         );
 
-        let event = crate::events::BranchUpdateEvent {
-            branch_id: branch_info.branch.id,
-            new_hash: branch_info.latest_hash.clone(),
-        };
-
-        let payload = serde_json::to_string(&event)?;
-
         sqlx::query!(
-            "INSERT INTO trigger_queue (event_payload) VALUES (?)",
-            payload
+            "INSERT INTO trigger_queue (branch_id, new_hash) VALUES (?, ?)",
+            branch_info.branch.id,
+            branch_info.latest_hash
         )
         .execute(&mut *transaction)
         .await?;
@@ -137,13 +131,12 @@ mod tests {
         assert_eq!(branch.last_commit_hash, Some("new-hash".to_string()));
 
         // Verify trigger queued
-        let queued_event = sqlx::query!("SELECT event_payload FROM trigger_queue")
+        let queued_event = sqlx::query!("SELECT branch_id, new_hash FROM trigger_queue")
             .fetch_one(&pool)
             .await
             .unwrap();
 
-        let event: crate::events::BranchUpdateEvent =
-            serde_json::from_str(&queued_event.event_payload).unwrap();
-        assert_eq!(event.new_hash, "new-hash");
+        assert_eq!(queued_event.branch_id, 1);
+        assert_eq!(queued_event.new_hash, "new-hash");
     }
 }

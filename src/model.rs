@@ -98,8 +98,11 @@ pub struct TriggerQueueItem {
     /// Unique database primary key.
     pub id: i64,
 
-    /// JSON representation of the `BranchUpdateEvent` payload.
-    pub event_payload: String,
+    /// Foreign key to [`Branch::id`].
+    pub branch_id: i64,
+
+    /// The hash of the latest commit on the branch.
+    pub new_hash: String,
 
     /// Number of times the task has been attempted.
     pub retry_count: i64,

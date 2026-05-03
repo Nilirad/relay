@@ -26,7 +26,6 @@ use crate::{
 
 mod context;
 mod error;
-mod events;
 mod handler;
 mod model;
 mod polling;
