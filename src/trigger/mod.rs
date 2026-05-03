@@ -128,9 +128,12 @@ async fn delete_trigger_from_queue(
 
 /// Marks a trigger as `FAILED` in the `trigger_queue`.
 async fn mark_task_as_failed(pool: &SqlitePool, id: i64) -> Result<(), sqlx::Error> {
-    sqlx::query!("UPDATE trigger_queue SET status = 'FAILED' WHERE id = ?", id)
-        .execute(pool)
-        .await?;
+    sqlx::query!(
+        "UPDATE trigger_queue SET status = 'FAILED' WHERE id = ?",
+        id
+    )
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -299,10 +302,7 @@ mod tests {
         let trigger = TriggerQueueItem {
             id,
             event_payload: "{}".to_string(),
-            status: "PROCESSING".to_string(),
             retry_count: 0,
-            next_retry_at: "0000-00-00 00:00:00".to_string(),
-            created_at: "0000-00-00 00:00:00".to_string(),
         };
 
         let engine = TriggerEngine {

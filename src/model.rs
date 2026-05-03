@@ -101,21 +101,6 @@ pub struct TriggerQueueItem {
     /// JSON representation of the `BranchUpdateEvent` payload.
     pub event_payload: String,
 
-    /// Status of the trigger task
-    /// (one of `PENDING`, `PROCESSING`, `COMPLETED`, or `FAILED`).
-    #[allow(dead_code)]
-    pub status: String,
-
     /// Number of times the task has been attempted.
     pub retry_count: i64,
-
-    /// Next scheduled attempt timestamp,
-    /// in standard SQL `DATETIME` format (`YYYY-MM-DD HH:MM:SS`).
-    #[allow(dead_code)]
-    pub next_retry_at: String,
-
-    /// Creation timestamp of the record,
-    /// in standard SQL `DATETIME` format (`YYYY-MM-DD HH:MM:SS`).
-    #[allow(dead_code)]
-    pub created_at: String,
 }
