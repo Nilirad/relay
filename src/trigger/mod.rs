@@ -94,7 +94,7 @@ async fn get_oldest_queued_trigger(
     pool: &SqlitePool,
 ) -> Result<Option<TriggerQueueItem>, sqlx::Error> {
     let trigger = sqlx::query_as::<_, TriggerQueueItem>(
-        "SELECT id, event_payload, status, retry_count, next_retry_at, created_at FROM trigger_queue
+        "SELECT id, event_payload, status, retry_count, next_retry_at, created_at, status_updated_at FROM trigger_queue
          WHERE status IN ('PENDING') AND next_retry_at <= CURRENT_TIMESTAMP
          ORDER BY next_retry_at ASC LIMIT 1"
     )
@@ -106,7 +106,7 @@ async fn get_oldest_queued_trigger(
     };
 
     sqlx::query!(
-        "UPDATE trigger_queue SET status = 'PROCESSING' WHERE id = ?",
+        "UPDATE trigger_queue SET status = 'PROCESSING', status_updated_at = CURRENT_TIMESTAMP WHERE id = ?",
         trigger.id
     )
     .execute(pool)
@@ -163,8 +163,21 @@ async fn schedule_retry(
     Ok(())
 }
 
+/// Recovers tasks that have been stuck in `PROCESSING` for too long.
+pub async fn recover_stuck_tasks(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    sqlx::query!(
+        "UPDATE trigger_queue
+         SET status = 'PENDING', status_updated_at = CURRENT_TIMESTAMP
+         WHERE status = 'PROCESSING'
+           AND status_updated_at < DATETIME('now', '-5 minutes')"
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 /// Sends a `repository_dispatch` event for each relevant [`Subscriber`].
-async fn dispatch_events(
+pub async fn dispatch_events(
     engine: &TriggerEngine,
     event: &BranchUpdateEvent,
 ) -> Result<(), WorkflowTriggerError> {
@@ -267,6 +280,34 @@ mod tests {
     use tokio_util::sync::CancellationToken;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn test_recover_stuck_tasks() {
+        let pool = crate::test_utils::create_test_db().await;
+
+        // Insert tasks
+        // 1. Processing (stuck)
+        sqlx::query!("INSERT INTO trigger_queue (event_payload, status, retry_count, status_updated_at) VALUES (?, ?, ?, DATETIME('now', '-10 minutes'))",
+            "{}", "PROCESSING", 0).execute(&pool).await.unwrap();
+        // 2. Processing (recent)
+        sqlx::query!("INSERT INTO trigger_queue (event_payload, status, retry_count, status_updated_at) VALUES (?, ?, ?, DATETIME('now', '-1 minute'))",
+            "{}", "PROCESSING", 0).execute(&pool).await.unwrap();
+        // 3. Pending
+        sqlx::query!("INSERT INTO trigger_queue (event_payload, status, retry_count, status_updated_at) VALUES (?, ?, ?, DATETIME('now'))",
+            "{}", "PENDING", 0).execute(&pool).await.unwrap();
+
+        recover_stuck_tasks(&pool).await.unwrap();
+
+        // Check status
+        let tasks = sqlx::query!("SELECT status FROM trigger_queue ORDER BY rowid")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+
+        assert_eq!(tasks[0].status, "PENDING"); // was stuck
+        assert_eq!(tasks[1].status, "PROCESSING"); // was recent
+        assert_eq!(tasks[2].status, "PENDING"); // was pending
+    }
 
     #[tokio::test]
     async fn test_get_oldest_queued_trigger() {

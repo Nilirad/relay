@@ -61,6 +61,9 @@ async fn run_app() -> Result<(), FatalError> {
         github_api_base_url: "https://api.github.com".to_string(),
         git_fetcher: std::sync::Arc::new(crate::polling::git::MainGitFetcher),
     };
+
+    crate::trigger::recover_stuck_tasks(&pool).await?;
+
     polling::start_polling_engine(ctx.clone());
 
     let authenticator = Box::new(GitHubAuthenticator {
