@@ -64,13 +64,17 @@ async fn process_queue(engine: &TriggerEngine) -> Result<(), WorkflowTriggerErro
         return Ok(());
     };
 
-    let event: BranchUpdateEvent = serde_json::from_str(&trigger.event_payload).map_err(|e| {
-        error!("Failed to deserialize payload for {}: {}", trigger.id, e);
-        WorkflowTriggerError::Api(RequestError::Response {
-            status: reqwest::StatusCode::INTERNAL_SERVER_ERROR,
-            text: e.to_string(),
-        })
-    })?;
+    let event: BranchUpdateEvent = match serde_json::from_str(&trigger.event_payload) {
+        Ok(event) => event,
+        Err(e) => {
+            error!("Failed to deserialize payload for {}: {}", trigger.id, e);
+            mark_task_as_failed(&engine.ctx.db_pool, trigger.id).await?;
+            return Err(WorkflowTriggerError::Api(RequestError::Response {
+                status: reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+                text: e.to_string(),
+            }));
+        }
+    };
 
     let dispatch_result = dispatch_events(engine, &event).await;
     match dispatch_result {
@@ -118,6 +122,14 @@ async fn delete_trigger_from_queue(
 ) -> Result<(), sqlx::Error> {
     sqlx::query!("DELETE FROM trigger_queue WHERE id = ?", trigger.id)
         .execute(&engine.ctx.db_pool)
+        .await?;
+    Ok(())
+}
+
+/// Marks a trigger as `FAILED` in the `trigger_queue`.
+async fn mark_task_as_failed(pool: &SqlitePool, id: i64) -> Result<(), sqlx::Error> {
+    sqlx::query!("UPDATE trigger_queue SET status = 'FAILED' WHERE id = ?", id)
+        .execute(pool)
         .await?;
     Ok(())
 }
@@ -390,5 +402,41 @@ mod tests {
             .unwrap();
         assert_eq!(trigger.retry_count, 1);
         assert_eq!(trigger.status, "PENDING");
+    }
+
+    #[tokio::test]
+    async fn test_process_queue_deserialization_failure() {
+        let pool = crate::test_utils::create_test_db().await;
+        let mock_server = MockServer::start().await;
+
+        // Insert invalid JSON payload
+        sqlx::query!("INSERT INTO trigger_queue (event_payload, status, retry_count, next_retry_at) VALUES (?, ?, ?, '2000-01-01 00:00:00')",
+            "invalid json", "PENDING", 0).execute(&pool).await.unwrap();
+
+        let engine = TriggerEngine {
+            ctx: SharedContext {
+                db_pool: pool.clone(),
+                token: CancellationToken::new(),
+                github_api_base_url: mock_server.uri(),
+                git_fetcher: Arc::new(MockGitFetcher {
+                    hash: "".to_string(),
+                }),
+            },
+            http_client: reqwest::Client::new(),
+            authenticator: Box::new(MockAuthenticator {
+                iat: "token".to_string(),
+            }),
+        };
+
+        // Should return error
+        let result = process_queue(&engine).await;
+        assert!(result.is_err());
+
+        // Should be marked as FAILED
+        let trigger = sqlx::query!("SELECT status FROM trigger_queue")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(trigger.status, "FAILED");
     }
 }
